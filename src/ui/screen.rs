@@ -15,20 +15,22 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .spacing(32)
         .height(Fill);
 
-    container(column![
-        top_bar(app.mode),
-        container(body)
-            .padding(Padding {
-                top: 28.0,
-                right: 24.0,
-                bottom: 0.0,
-                left: 28.0,
-            })
-            .width(Fill)
-            .height(Fill)
-            .style(style::panel),
-    ]
-    .spacing(14))
+    container(
+        column![
+            top_bar(app.mode),
+            container(body)
+                .padding(Padding {
+                    top: 28.0,
+                    right: 24.0,
+                    bottom: 0.0,
+                    left: 28.0,
+                })
+                .width(Fill)
+                .height(Fill)
+                .style(style::panel),
+        ]
+        .spacing(14),
+    )
     .padding(Padding {
         top: 14.0,
         right: 14.0,
@@ -52,8 +54,16 @@ fn top_bar(mode: Mode) -> Element<'static, Message> {
         top_pill(labeled(lu::search(), "Search"), false, Message::Noop),
         top_pill(labeled(lu::plus(), "New Bug"), false, Message::Noop),
         vdivider(),
-        top_pill(labeled(lu::folder_git_2(), "Repositories"), false, Message::Noop),
-        top_pill(labeled(lu::git_branch(), mock::WORKSPACE), true, Message::Noop),
+        top_pill(
+            labeled(lu::folder_git_2(), "Repositories"),
+            false,
+            Message::Noop
+        ),
+        top_pill(
+            labeled(lu::git_branch(), mock::WORKSPACE),
+            true,
+            Message::Noop
+        ),
         icon_pill(lu::ellipsis(), Message::Noop),
     ]
     .spacing(8)
@@ -160,13 +170,10 @@ fn content(section: Section) -> Element<'static, Message> {
         _ => empty_state(title),
     };
 
-    column![
-        header,
-        scrollable(body).height(Fill).style(style::scroll),
-    ]
-    .spacing(28)
-    .width(Fill)
-    .into()
+    column![header, scrollable(body).height(Fill).style(style::scroll),]
+        .spacing(28)
+        .width(Fill)
+        .into()
 }
 
 fn epic_card(epic: &'static Epic) -> Element<'static, Message> {
@@ -200,8 +207,12 @@ fn epic_card(epic: &'static Epic) -> Element<'static, Message> {
             heading,
             split_progress(epic.ratio()),
             details,
-            row![labels, space::horizontal(), text(epic.id).size(13).style(style::subtle)]
-                .align_y(Alignment::Center),
+            row![
+                labels,
+                space::horizontal(),
+                text(epic.id).size(13).style(style::subtle)
+            ]
+            .align_y(Alignment::Center),
         ]
         .spacing(28),
     )
@@ -215,7 +226,9 @@ fn empty_state(title: &'static str) -> Element<'static, Message> {
     container(
         column![
             text(title).size(18),
-            text("Mock screen — not wired yet.").size(14).style(style::muted),
+            text("Mock screen — not wired yet.")
+                .size(14)
+                .style(style::muted),
         ]
         .spacing(6)
         .align_x(Alignment::Center),

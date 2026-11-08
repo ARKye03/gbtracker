@@ -257,7 +257,6 @@ pub fn icon_muted(theme: &Theme, _status: svg::Status) -> svg::Style {
     }
 }
 
-
 // --- scrollable ---
 
 pub fn scroll(theme: &Theme, status: scrollable::Status) -> scrollable::Style {

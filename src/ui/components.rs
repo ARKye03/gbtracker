@@ -34,7 +34,11 @@ pub fn top_pill<'a, M: Clone + 'a>(
     button(container(content).center_y(Fill))
         .height(40)
         .padding([0, 14])
-        .style(if active { style::pill_active } else { style::pill })
+        .style(if active {
+            style::pill_active
+        } else {
+            style::pill
+        })
         .on_press(on_press)
         .into()
 }
@@ -100,9 +104,14 @@ pub fn split_progress<'a, M: 'a>(ratio: f32) -> Element<'a, M> {
             .length(Fill)
             .style(style::progress(tone)),
         row![
-            text!("{done}%").size(13).font(MEDIUM).style(style::tone_text(tone, false)),
+            text!("{done}%")
+                .size(13)
+                .font(MEDIUM)
+                .style(style::tone_text(tone, false)),
             space::horizontal(),
-            text!("{}%", 100 - done).size(13).style(style::tone_text(tone, true)),
+            text!("{}%", 100 - done)
+                .size(13)
+                .style(style::tone_text(tone, true)),
         ],
     ]
     .spacing(10)
