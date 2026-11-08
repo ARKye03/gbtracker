@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gbtracker::cache::{self, Cache, Snapshot};
-use gbtracker::gitbug::{self, GitBugError, Issue, Status};
+use gbtracker::filter::{self, Filter, StateFilter, StatusFilter};
+use gbtracker::gitbug::{self, GitBugError, Issue, Kind, Status};
 use gbtracker::workspace::{self, RepoInfo, Root, RootKind, Workspace};
 use iced::{Element, Subscription, Task, Theme, event, time, window};
 use tokio::sync::Semaphore;
@@ -16,6 +17,8 @@ use crate::{Section, ui};
 const MAX_CONCURRENT: usize = 4;
 const TRACK_EVERY: Duration = Duration::from_secs(5);
 const SPIN_EVERY: Duration = Duration::from_millis(250);
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(150);
+pub const PAGE_SIZE: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadState {
@@ -41,6 +44,8 @@ pub struct RepoEntry {
     /// Set only together with `issues`, so a match proves the issues are current.
     pub fingerprint: Option<String>,
     pub issues: Vec<Issue>,
+    /// Lowercased search text per issue, parallel to `issues`.
+    keys: Vec<String>,
 }
 
 impl RepoEntry {
@@ -55,7 +60,13 @@ impl RepoEntry {
             state,
             fingerprint: None,
             issues: Vec::new(),
+            keys: Vec::new(),
         }
+    }
+
+    fn set_issues(&mut self, issues: Vec<Issue>) {
+        self.keys = issues.iter().map(filter::search_key).collect();
+        self.issues = issues;
     }
 
     pub fn open_count(&self) -> usize {
@@ -68,6 +79,14 @@ impl RepoEntry {
     pub fn closed_count(&self) -> usize {
         self.issues.len() - self.open_count()
     }
+}
+
+/// One visible issue, addressed by position in `App::repos` and that repo's `issues`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Row {
+    pub repo: usize,
+    pub issue: usize,
+    pub depth: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +122,14 @@ pub struct App {
     pub last_synced: Option<SystemTime>,
     pub notice: Option<String>,
     pub spin: usize,
+    pub filter: Filter,
+    /// Raw search box content; `filter` only sees it once typing settles.
+    pub search: String,
+    pub roadmap: bool,
+    /// Filtered (and, for the roadmap view, ordered) result, recomputed in `update`.
+    pub rows: Vec<Row>,
+    pub shown: usize,
+    search_seq: u64,
     /// Set when the config file was unreadable; saving is disabled so it is never overwritten.
     config_locked: bool,
     epoch: u64,
@@ -115,6 +142,15 @@ pub enum Message {
     ToggleTheme,
     Navigate(Section),
     Noop,
+    ToggleKind(Kind),
+    SetStatus(StatusFilter),
+    SetState(StateFilter),
+    PickRepo(Option<PathBuf>),
+    SearchInput(String),
+    SearchSettled(u64),
+    ToggleRoadmap,
+    ClearFilters,
+    ShowMore,
     Discovered {
         epoch: u64,
         repos: Vec<RepoInfo>,
@@ -169,16 +205,21 @@ impl App {
         let repos = repos
             .into_iter()
             .map(|info| match issues.remove(&info.root) {
-                Some(cached) if info.has_git_bug => RepoEntry {
-                    state: LoadState::Cached,
-                    fingerprint: Some(cached.fingerprint),
-                    issues: cached.issues,
-                    info,
-                },
+                Some(cached) if info.has_git_bug => {
+                    let mut entry = RepoEntry {
+                        state: LoadState::Cached,
+                        fingerprint: Some(cached.fingerprint),
+                        issues: Vec::new(),
+                        keys: Vec::new(),
+                        info,
+                    };
+                    entry.set_issues(cached.issues);
+                    entry
+                }
                 _ => RepoEntry::fresh(info),
             })
             .collect();
-        App {
+        let mut app = App {
             mode: if workspace.dark {
                 Mode::Dark
             } else {
@@ -192,11 +233,78 @@ impl App {
             last_synced: None,
             notice: None,
             spin: 0,
+            filter: Filter::default(),
+            search: String::new(),
+            roadmap: false,
+            rows: Vec::new(),
+            shown: PAGE_SIZE,
+            search_seq: 0,
             config_locked: false,
             epoch: 0,
             cache,
             permits: Arc::new(Semaphore::new(MAX_CONCURRENT)),
-        }
+        };
+        app.refilter();
+        app
+    }
+
+    /// Recomputes `rows` from the loaded issues; the only place filtering and ordering happen.
+    fn refilter(&mut self) {
+        let hits: Vec<(usize, usize)> = self
+            .repos
+            .iter()
+            .enumerate()
+            .flat_map(|(r, entry)| {
+                let root = entry.info.root.as_path();
+                let filter = &self.filter;
+                entry
+                    .issues
+                    .iter()
+                    .zip(&entry.keys)
+                    .enumerate()
+                    .filter(move |(_, (issue, key))| filter::matches(issue, root, key, filter))
+                    .map(move |(i, _)| (r, i))
+            })
+            .collect();
+
+        self.rows = if self.roadmap {
+            let refs: Vec<&Issue> = hits
+                .iter()
+                .map(|&(r, i)| &self.repos[r].issues[i])
+                .collect();
+            filter::roadmap_order(&refs)
+                .into_iter()
+                .map(|p| Row {
+                    repo: hits[p.index].0,
+                    issue: hits[p.index].1,
+                    depth: p.depth,
+                })
+                .collect()
+        } else {
+            hits.into_iter()
+                .map(|(repo, issue)| Row {
+                    repo,
+                    issue,
+                    depth: 0,
+                })
+                .collect()
+        };
+    }
+
+    fn apply_filter(&mut self) {
+        self.shown = PAGE_SIZE;
+        self.refilter();
+    }
+
+    pub fn total_issues(&self) -> usize {
+        self.repos.iter().map(|e| e.issues.len()).sum()
+    }
+
+    pub fn loading_repos(&self) -> usize {
+        self.repos
+            .iter()
+            .filter(|e| e.fingerprint.is_none() && e.state.is_busy())
+            .count()
     }
 
     pub fn start_discovery(&mut self) -> Task<Message> {
@@ -222,6 +330,64 @@ impl App {
                 Task::none()
             }
             Message::Noop => Task::none(),
+            Message::ToggleKind(kind) => {
+                self.filter.toggle_kind(kind);
+                self.apply_filter();
+                Task::none()
+            }
+            Message::SetStatus(status) => {
+                self.filter.status = status;
+                self.roadmap = false;
+                self.apply_filter();
+                Task::none()
+            }
+            Message::SetState(state) => {
+                self.filter.state = state;
+                self.apply_filter();
+                Task::none()
+            }
+            Message::PickRepo(root) => {
+                self.filter.repos.clear();
+                self.filter.repos.extend(root);
+                self.apply_filter();
+                Task::none()
+            }
+            Message::SearchInput(text) => {
+                self.search = text;
+                self.search_seq += 1;
+                let seq = self.search_seq;
+                Task::perform(
+                    async { tokio::time::sleep(SEARCH_DEBOUNCE).await },
+                    move |()| Message::SearchSettled(seq),
+                )
+            }
+            Message::SearchSettled(seq) => {
+                if seq == self.search_seq {
+                    self.filter.set_text(&self.search);
+                    self.apply_filter();
+                }
+                Task::none()
+            }
+            Message::ToggleRoadmap => {
+                self.roadmap = !self.roadmap;
+                if self.roadmap {
+                    self.filter.status = StatusFilter::Open;
+                }
+                self.apply_filter();
+                Task::none()
+            }
+            Message::ClearFilters => {
+                self.filter = Filter::default();
+                self.search.clear();
+                self.search_seq += 1;
+                self.roadmap = false;
+                self.apply_filter();
+                Task::none()
+            }
+            Message::ShowMore => {
+                self.shown += PAGE_SIZE;
+                Task::none()
+            }
             Message::Discovered { epoch, repos } => self.on_discovered(epoch, repos),
             Message::Fingerprinted {
                 epoch,
@@ -300,6 +466,9 @@ impl App {
                 entry
             })
             .collect();
+        let known: Vec<&PathBuf> = self.repos.iter().map(|e| &e.info.root).collect();
+        self.filter.repos.retain(|r| known.contains(&r));
+        self.refilter();
 
         let mut tasks = vec![self.persist_repos(found)];
         let roots: Vec<PathBuf> = self
@@ -374,9 +543,10 @@ impl App {
         let task = match result {
             Ok(issues) => {
                 entry.state = LoadState::Ready(issues.len());
-                entry.issues = issues;
+                entry.set_issues(issues);
                 entry.fingerprint = Some(fingerprint.clone());
                 let (info, issues) = (entry.info.clone(), entry.issues.clone());
+                self.refilter();
                 self.persist_issues(info, fingerprint, issues)
             }
             Err(LoadFailure::Locked) => {
@@ -801,6 +971,92 @@ mod tests {
         };
         let app = App::from_parts(ws, Snapshot::default(), None);
         assert_eq!(app.mode, Mode::Dark);
+    }
+
+    fn titled(title: &str, status: Status) -> Issue {
+        Issue {
+            title: title.into(),
+            ..issue(status)
+        }
+    }
+
+    fn row_titles(app: &App) -> Vec<&str> {
+        app.rows
+            .iter()
+            .map(|r| app.repos[r.repo].issues[r.issue].title.as_str())
+            .collect()
+    }
+
+    fn loaded(titles: &[(&str, Status)]) -> App {
+        let mut app = booted(&["a"]);
+        app.send(Message::Fingerprinted {
+            epoch: 1,
+            root: info("a").root,
+            result: Ok("new".into()),
+        });
+        app.send(Message::Loaded {
+            epoch: 1,
+            root: info("a").root,
+            fingerprint: "new".into(),
+            result: Ok(titles.iter().map(|(t, s)| titled(t, *s)).collect()),
+        });
+        app
+    }
+
+    #[test]
+    fn rows_default_to_open_and_follow_loaded_data() {
+        let app = loaded(&[("one", Status::Open), ("two", Status::Closed)]);
+        assert_eq!(row_titles(&app), ["one"]);
+        assert_eq!(app.total_issues(), 2);
+    }
+
+    #[test]
+    fn filter_messages_recompute_rows() {
+        let mut app = loaded(&[("one", Status::Open), ("two", Status::Closed)]);
+        app.send(Message::SetStatus(StatusFilter::All));
+        assert_eq!(row_titles(&app), ["one", "two"]);
+        app.send(Message::SetStatus(StatusFilter::Closed));
+        assert_eq!(row_titles(&app), ["two"]);
+        app.send(Message::PickRepo(Some("/r/other".into())));
+        assert!(app.rows.is_empty());
+        app.send(Message::PickRepo(None));
+        assert_eq!(row_titles(&app), ["two"]);
+        app.send(Message::ClearFilters);
+        assert_eq!(row_titles(&app), ["one"]);
+    }
+
+    #[test]
+    fn search_is_debounced_to_the_latest_keystroke() {
+        let mut app = loaded(&[("alpha", Status::Open), ("beta", Status::Open)]);
+        assert_eq!(app.update(Message::SearchInput("be".into())).units(), 1);
+        app.send(Message::SearchInput("bet".into()));
+        app.send(Message::SearchSettled(1));
+        assert_eq!(app.rows.len(), 2, "stale timer ignored");
+        app.send(Message::SearchSettled(2));
+        assert_eq!(row_titles(&app), ["beta"]);
+        assert_eq!(app.search, "bet");
+    }
+
+    #[test]
+    fn roadmap_forces_open_and_status_change_leaves_it() {
+        let mut app = loaded(&[("one", Status::Open), ("two", Status::Closed)]);
+        app.send(Message::SetStatus(StatusFilter::All));
+        app.send(Message::ToggleRoadmap);
+        assert!(app.roadmap);
+        assert_eq!(app.filter.status, StatusFilter::Open);
+        assert_eq!(row_titles(&app), ["one"]);
+        app.send(Message::SetStatus(StatusFilter::All));
+        assert!(!app.roadmap);
+    }
+
+    #[test]
+    fn show_more_pages_through_rows_without_refiltering() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        assert_eq!(app.shown, PAGE_SIZE);
+        app.send(Message::ShowMore);
+        assert_eq!(app.shown, 2 * PAGE_SIZE);
+        app.send(Message::ToggleKind(Kind::Bug));
+        assert_eq!(app.shown, PAGE_SIZE);
     }
 
     #[test]

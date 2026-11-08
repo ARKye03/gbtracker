@@ -69,10 +69,23 @@ pub fn secondary_button<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Eleme
         .into()
 }
 
-pub fn chip<'a, M: 'a>(label: &'a str) -> Element<'a, M> {
+pub fn chip<'a, M: 'a>(label: impl text::IntoFragment<'a>) -> Element<'a, M> {
     container(text(label).size(13))
         .padding([5, 8])
         .style(style::chip)
+        .into()
+}
+
+/// Pressable chip for filters; the active one is raised like the active tab.
+pub fn toggle_chip<'a, M: Clone + 'a>(label: &'a str, active: bool, on_press: M) -> Element<'a, M> {
+    button(text(label).size(13))
+        .padding([6, 12])
+        .style(if active {
+            style::pill_active
+        } else {
+            style::pill
+        })
+        .on_press(on_press)
         .into()
 }
 

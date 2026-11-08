@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 directories = "6.0.0"
-iced = { version = "0.14", features = ["svg", "advanced", "tokio"] }
+iced = { version = "0.14", features = ["svg", "advanced", "tokio", "lazy"] }
 lucide-iced = "0.4"
 rfd = "0.18.0"
 serde = { version = "1.0.229", features = ["derive"] }

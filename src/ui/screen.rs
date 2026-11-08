@@ -1,20 +1,28 @@
-use iced::widget::{button, column, container, row, scrollable, space, text};
+use std::fmt;
+use std::path::PathBuf;
+
+use iced::widget::{
+    button, column, container, lazy, pick_list, row, scrollable, space, text, text_input,
+};
 use iced::{Alignment, Element, Fill, Padding};
 use lucide_iced::icon as lu;
 
 use super::components::{
     MEDIUM, chip, detail_row, dot, icon, icon_muted, icon_pill, labeled, primary_button,
-    secondary_button, skeleton, spinner_dot, split_progress, top_pill, vdivider,
+    secondary_button, skeleton, spinner_dot, split_progress, toggle_chip, top_pill, vdivider,
 };
 use crate::Section;
-use crate::app::{App, LoadState, Message, RepoEntry, ago};
+use crate::app::{App, LoadState, Message, RepoEntry, Row, ago};
 use crate::mock::{self, Epic};
 use crate::theme::{Mode, Tone, style};
+use gbtracker::filter::{StateFilter, StatusFilter};
+use gbtracker::gitbug::{Issue, Kind, State, Status};
 use gbtracker::workspace::{Root, RootKind};
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let page = match app.section {
         Section::Repositories => repositories(app),
+        Section::Issues => issues(app),
         other => content(other),
     };
     let body = row![sidebar(app), page].spacing(32).height(Fill);
@@ -248,7 +256,7 @@ fn epic_card(epic: &'static Epic) -> Element<'static, Message> {
     ]
     .spacing(18);
 
-    let labels = row(epic.labels.iter().map(|l| chip(l))).spacing(8);
+    let labels = row(epic.labels.iter().map(|l| chip(*l))).spacing(8);
 
     container(
         column![
@@ -468,6 +476,257 @@ fn skeleton_card() -> Element<'static, Message> {
         .spacing(14),
     )
     .padding(28)
+    .width(Fill)
+    .style(style::card)
+    .into()
+}
+
+#[derive(Clone, PartialEq)]
+struct RepoChoice {
+    root: Option<PathBuf>,
+    name: String,
+}
+
+impl fmt::Display for RepoChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+fn issues(app: &App) -> Element<'_, Message> {
+    let total = app.total_issues();
+    let count = if app.rows.len() == total {
+        format!("{total} issues")
+    } else {
+        format!("{} of {total} issues", app.rows.len())
+    };
+    let filtered = !app.filter.is_default() || app.roadmap || !app.search.is_empty();
+
+    let mut header = row![
+        text("Issues").size(21),
+        text(count).size(14).style(style::muted),
+        space::horizontal(),
+    ]
+    .spacing(18)
+    .align_y(Alignment::Center);
+    if filtered {
+        header = header.push(secondary_button("Clear filters", Message::ClearFilters));
+    }
+    header = header.push(if app.roadmap {
+        primary_button("Open roadmap", Message::ToggleRoadmap)
+    } else {
+        secondary_button("Open roadmap", Message::ToggleRoadmap)
+    });
+
+    let mut list = column![].spacing(8).padding(Padding {
+        bottom: 24.0,
+        right: 10.0,
+        ..Padding::ZERO
+    });
+    list = list.extend(app.rows.iter().take(app.shown).map(|r| issue_row(app, r)));
+    if app.rows.len() > app.shown {
+        list = list.push(
+            button(text!("Show {} more", app.rows.len() - app.shown).size(14))
+                .padding([10, 16])
+                .style(style::secondary)
+                .on_press(Message::ShowMore),
+        );
+    }
+    if app.loading_repos() > 0 || app.discovering {
+        list = list.extend((0..3).map(|_| skeleton_row()));
+    } else if app.rows.is_empty() {
+        list = list.push(
+            container(
+                text(if total == 0 {
+                    "No issues yet."
+                } else {
+                    "No issues match these filters."
+                })
+                .size(14)
+                .style(style::muted),
+            )
+            .padding(48)
+            .center_x(Fill)
+            .style(style::card),
+        );
+    }
+
+    column![
+        header,
+        filter_bar(app),
+        scrollable(list).height(Fill).style(style::scroll)
+    ]
+    .spacing(20)
+    .width(Fill)
+    .into()
+}
+
+fn filter_bar(app: &App) -> Element<'_, Message> {
+    let filter = &app.filter;
+
+    let kinds = row([
+        ("Epic", Kind::Epic),
+        ("Task", Kind::Task),
+        ("Bug", Kind::Bug),
+    ]
+    .into_iter()
+    .map(|(label, kind)| {
+        let active = filter.kinds.contains(&kind);
+        toggle_chip(label, active, Message::ToggleKind(kind))
+    }))
+    .spacing(6);
+
+    let status = row([
+        ("Open", StatusFilter::Open),
+        ("Closed", StatusFilter::Closed),
+        ("All", StatusFilter::All),
+    ]
+    .into_iter()
+    .map(|(label, value)| toggle_chip(label, filter.status == value, Message::SetStatus(value))))
+    .spacing(6);
+
+    let state = row([
+        ("Any state", StateFilter::Any),
+        ("In progress", StateFilter::InProgress),
+        ("Blocked", StateFilter::Blocked),
+    ]
+    .into_iter()
+    .map(|(label, value)| toggle_chip(label, filter.state == value, Message::SetState(value))))
+    .spacing(6);
+
+    let mut choices = vec![RepoChoice {
+        root: None,
+        name: "All repositories".to_owned(),
+    }];
+    choices.extend(app.repos.iter().map(|e| RepoChoice {
+        root: Some(e.info.root.clone()),
+        name: e.info.name.clone(),
+    }));
+    let selected = filter
+        .repos
+        .iter()
+        .next()
+        .and_then(|root| choices.iter().find(|c| c.root.as_ref() == Some(root)))
+        .or_else(|| choices.first())
+        .cloned();
+    let repo = pick_list(choices, selected, |c: RepoChoice| Message::PickRepo(c.root))
+        .text_size(14)
+        .padding([7, 12]);
+
+    let search = text_input("Search title or id", &app.search)
+        .on_input(Message::SearchInput)
+        .size(14)
+        .padding([8, 12])
+        .width(260);
+
+    row![kinds, vdivider(), status, vdivider(), state, repo, search]
+        .spacing(14)
+        .align_y(Alignment::Center)
+        .wrap()
+        .vertical_spacing(10)
+        .into()
+}
+
+fn issue_row<'a>(app: &'a App, row: &Row) -> Element<'a, Message> {
+    let entry = &app.repos[row.repo];
+    let issue = &entry.issues[row.issue];
+    let depth = row.depth;
+    let key = (
+        &entry.info.root,
+        &entry.info.name,
+        &issue.id,
+        &issue.edited,
+        issue.status == Status::Closed,
+        depth,
+    );
+    lazy(key, move |_| issue_card(&entry.info.name, issue, depth)).into()
+}
+
+fn kind_label(kind: Option<&Kind>) -> String {
+    match kind {
+        Some(Kind::Epic) => "epic".to_owned(),
+        Some(Kind::Task) => "task".to_owned(),
+        Some(Kind::Bug) => "bug".to_owned(),
+        Some(Kind::Other(other)) => other.clone(),
+        None => "issue".to_owned(),
+    }
+}
+
+fn state_badge(issue: &Issue) -> Element<'static, Message> {
+    let (label, tone) = match (&issue.status, &issue.state) {
+        (Status::Closed, _) => ("Closed", None),
+        (_, Some(State::InProgress)) => ("In progress", Some(Tone::Success)),
+        (_, Some(State::Blocked)) => ("Blocked", Some(Tone::Danger)),
+        (_, Some(State::Done)) => ("Done", None),
+        _ => ("Open", None),
+    };
+    let indicator: Element<'static, Message> = match tone {
+        Some(tone) => dot(tone, 10.0),
+        None => container(space())
+            .width(10)
+            .height(10)
+            .style(style::neutral_dot)
+            .into(),
+    };
+    row![indicator, text(label).size(13).style(style::subtle)]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into()
+}
+
+fn issue_card(repo: &str, issue: &Issue, depth: usize) -> Element<'static, Message> {
+    let labels = row(issue
+        .labels
+        .iter()
+        .filter(|l| {
+            !["kind:", "epic:", "state:"]
+                .iter()
+                .any(|p| l.starts_with(p))
+        })
+        .map(|l| chip(l.clone())))
+    .spacing(6);
+
+    let meta = row![
+        text(issue.human_id.clone()).size(13).style(style::subtle),
+        text(repo.to_owned()).size(13).style(style::subtle),
+        labels,
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center);
+
+    let card = container(
+        row![
+            chip(kind_label(issue.kind.as_ref())),
+            column![text(issue.title.clone()).size(15).font(MEDIUM), meta].spacing(6),
+            space::horizontal(),
+            state_badge(issue),
+        ]
+        .spacing(14)
+        .align_y(Alignment::Center),
+    )
+    .padding([14, 20])
+    .width(Fill)
+    .style(style::card);
+
+    container(card)
+        .padding(Padding {
+            left: depth as f32 * 32.0,
+            ..Padding::ZERO
+        })
+        .into()
+}
+
+fn skeleton_row() -> Element<'static, Message> {
+    container(
+        row![
+            skeleton(48.0, 22.0),
+            skeleton(Fill, 14.0),
+            skeleton(80.0, 14.0)
+        ]
+        .spacing(14)
+        .align_y(Alignment::Center),
+    )
+    .padding([18, 20])
     .width(Fill)
     .style(style::card)
     .into()

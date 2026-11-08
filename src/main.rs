@@ -13,7 +13,7 @@ pub enum Section {
     #[default]
     Repositories,
     Overview,
-    Bugs,
+    Issues,
     Epics,
     Labels,
     Identities,
@@ -25,7 +25,7 @@ impl Section {
     pub const ALL: [Section; 8] = [
         Section::Repositories,
         Section::Overview,
-        Section::Bugs,
+        Section::Issues,
         Section::Epics,
         Section::Labels,
         Section::Identities,
@@ -37,7 +37,7 @@ impl Section {
         match self {
             Section::Repositories => (lu::folder_git_2(), "Repositories"),
             Section::Overview => (lu::house(), "Overview"),
-            Section::Bugs => (lu::bug(), "Bugs"),
+            Section::Issues => (lu::bug(), "Issues"),
             Section::Epics => (lu::milestone(), "Epics"),
             Section::Labels => (lu::tag(), "Labels"),
             Section::Identities => (lu::users(), "Identities"),

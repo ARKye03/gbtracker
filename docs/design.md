@@ -16,6 +16,7 @@ GBTRACKER_THEME=dark cargo run    # dark (or use the moon/sun button in the top 
 | `src/theme/mod.rs` | `Mode` (Light/Dark), `Tokens` (all colors), `Tone` (success/warning/danger) |
 | `src/theme/style.rs` | Style fns for `.style(...)`, plus `radius::*` |
 | `src/ui/components.rs` | Building blocks: pills, buttons, chip, dot, detail row, split progress |
+| `src/filter.rs` | `Filter`, pure `matches`, `/roadmap-open` ordering (`roadmap_order`) |
 | `src/ui/screen.rs` | Mock screen: top bar, sidebar, Epics page |
 | `src/mock.rs` | Sample data shaped like git-bug output |
 
@@ -37,7 +38,7 @@ GBTRACKER_THEME=dark cargo run    # dark (or use the moon/sun button in the top 
 | Org Settings tab | Active repo tab (`gbtracker`) |
 | Job Postings tab | Repositories, the list of wrapped dirs |
 | Talk to AI box | Sync status pill (dot uses `Tone`) |
-| Sidebar sections | Overview, Bugs, Epics, Labels, Identities, Bridges, Analytics |
+| Sidebar sections | Overview, Issues, Epics, Labels, Identities, Bridges, Analytics |
 | Budget card | Epic card: bug count, title, closed/open bar, details, labels, short id |
 | Add Budget | New Epic |
 
