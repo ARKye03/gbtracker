@@ -43,13 +43,14 @@ fn hash_hex(bytes: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-/// Changes on any bug write; costs one git call and takes no git-bug lock.
+/// Changes on any bug or identity write; costs one git call and takes no git-bug lock.
 pub async fn fingerprint(root: &Path) -> Result<String, GitError> {
     let refs = git(
         root,
         &[
             "for-each-ref",
             "refs/bugs",
+            "refs/identities",
             "--format=%(refname) %(objectname)",
         ],
     )
@@ -176,7 +177,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fingerprint_changes_only_when_bug_refs_change() {
+    async fn fingerprint_tracks_bug_and_identity_refs() {
         let tmp = tempfile::tempdir().unwrap();
         init_repo(tmp.path());
         let empty = fingerprint(tmp.path()).await.unwrap();
