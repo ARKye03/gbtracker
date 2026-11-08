@@ -871,6 +871,9 @@ fn issue_row<'a>(app: &'a App, row: &Row) -> Element<'a, Message> {
         .as_ref()
         .is_some_and(|p| p.root == entry.info.root && p.summary.id == issue.id);
     let pending = app.is_pending(&entry.info.root, &issue.id);
+    let error = app
+        .write_errors
+        .get(&(entry.info.root.clone(), issue.id.clone()));
     let key = (
         &entry.info.root,
         &entry.info.name,
@@ -880,6 +883,7 @@ fn issue_row<'a>(app: &'a App, row: &Row) -> Element<'a, Message> {
         depth,
         selected,
         pending.then_some(app.spin),
+        error,
     );
     lazy(key, move |_| {
         issue_card(
@@ -889,6 +893,7 @@ fn issue_row<'a>(app: &'a App, row: &Row) -> Element<'a, Message> {
             depth,
             selected,
             pending.then_some(app.spin),
+            error.map(String::as_str),
         )
     })
     .into()
@@ -933,6 +938,7 @@ fn issue_card(
     depth: usize,
     selected: bool,
     pending: Option<usize>,
+    error: Option<&str>,
 ) -> Element<'static, Message> {
     let labels = row(issue
         .labels
@@ -953,10 +959,19 @@ fn issue_card(
     .spacing(12)
     .align_y(Alignment::Center);
 
+    let mut details = column![text(issue.title.clone()).size(15).font(MEDIUM), meta].spacing(6);
+    if let Some(error) = error {
+        details = details.push(
+            text(error.to_owned())
+                .size(13)
+                .style(style::tone_text(Tone::Danger, false)),
+        );
+    }
+
     let card = button(
         row![
             chip(kind_label(issue.kind.as_ref())),
-            column![text(issue.title.clone()).size(15).font(MEDIUM), meta].spacing(6),
+            details,
             space::horizontal(),
             state_badge(issue),
         ]

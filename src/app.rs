@@ -724,7 +724,7 @@ impl App {
         )
     }
 
-    /// A failed write changes nothing locally; a successful one replaces the issue everywhere it is held.
+    /// A failed write keeps the local copy (a partly applied one is picked up by the next fingerprint check); a successful one replaces the issue everywhere it is held.
     fn on_written(
         &mut self,
         root: PathBuf,
