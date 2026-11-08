@@ -13,9 +13,9 @@ use super::components::{
 };
 use crate::Section;
 use crate::app::{App, LoadState, Message, RepoEntry, Row, ago};
-use crate::mock::{self, Epic};
 use crate::theme::{Mode, Tone, style};
-use gbtracker::filter::{StateFilter, StatusFilter};
+use gbtracker::epics::{self, EpicSummary};
+use gbtracker::filter::{Filter, StateFilter, StatusFilter};
 use gbtracker::gitbug::{Issue, Kind, State, Status};
 use gbtracker::workspace::{Root, RootKind};
 
@@ -23,6 +23,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let page = match app.section {
         Section::Repositories => repositories(app),
         Section::Issues => issues(app),
+        Section::Epics => epics_page(app),
+        Section::Overview => overview(app),
         other => content(other),
     };
     let body = row![sidebar(app), page].spacing(32).height(Fill);
@@ -88,7 +90,7 @@ fn top_bar(app: &App) -> Element<'_, Message> {
 
     let sync = sync_pill(app);
 
-    let avatar = container(text(mock::IDENTITY_INITIALS).size(13).font(MEDIUM))
+    let avatar = container(text(app.initials.as_str()).size(13).font(MEDIUM))
         .center(32)
         .style(style::avatar);
 
@@ -214,66 +216,262 @@ fn content(section: Section) -> Element<'static, Message> {
     .spacing(18)
     .align_y(Alignment::Center);
 
-    let body: Element<'_, Message> = match section {
-        Section::Epics => column(mock::EPICS.iter().map(epic_card))
-            .spacing(16)
-            .padding(Padding {
-                bottom: 24.0,
-                right: 10.0,
-                ..Padding::ZERO
-            })
-            .into(),
-        _ => empty_state(title),
-    };
+    column![
+        header,
+        scrollable(empty_state(title))
+            .height(Fill)
+            .style(style::scroll),
+    ]
+    .spacing(28)
+    .width(Fill)
+    .into()
+}
 
-    column![header, scrollable(body).height(Fill).style(style::scroll),]
+fn epics_page(app: &App) -> Element<'_, Message> {
+    let count = if app.epics.len() == 1 {
+        "1 epic".to_owned()
+    } else {
+        format!("{} epics", app.epics.len())
+    };
+    let status = row([
+        ("Open", StatusFilter::Open),
+        ("Closed", StatusFilter::Closed),
+        ("All", StatusFilter::All),
+    ]
+    .into_iter()
+    .map(|(label, value)| {
+        toggle_chip(
+            label,
+            app.epic_filter.status == value,
+            Message::SetEpicStatus(value),
+        )
+    }))
+    .spacing(6);
+
+    let header = row![
+        text("Epics").size(21),
+        text(count).size(14).style(style::muted),
+        space::horizontal(),
+        status,
+        repo_picker(app, &app.epic_filter, Message::PickEpicRepo),
+    ]
+    .spacing(18)
+    .align_y(Alignment::Center);
+
+    let mut list = column![].spacing(16).padding(Padding {
+        bottom: 24.0,
+        right: 10.0,
+        ..Padding::ZERO
+    });
+    list = list.extend(app.epics.iter().map(|s| epic_card(app, s)));
+    if app.loading_repos() > 0 || app.discovering {
+        list = list.extend((0..2).map(|_| skeleton_card()));
+    } else if app.epics.is_empty() {
+        list = list.push(
+            container(
+                text(if app.repos.iter().all(|e| e.issues.is_empty()) {
+                    "No epics yet."
+                } else {
+                    "No epics match these filters."
+                })
+                .size(14)
+                .style(style::muted),
+            )
+            .padding(48)
+            .center_x(Fill)
+            .style(style::card),
+        );
+    }
+
+    column![header, scrollable(list).height(Fill).style(style::scroll)]
         .spacing(28)
         .width(Fill)
         .into()
 }
 
-fn epic_card(epic: &'static Epic) -> Element<'static, Message> {
+fn epic_card<'a>(app: &'a App, summary: &EpicSummary) -> Element<'a, Message> {
+    let entry = &app.repos[summary.repo];
+    let epic = &entry.issues[summary.epic];
+    let key = (entry.info.root.clone(), epic.id.clone());
+    let expanded = app.expanded.contains(&key);
+
+    let headline = if summary.total == 1 {
+        "1 task".to_owned()
+    } else {
+        format!("{} tasks", summary.total)
+    };
+    let chevron = if expanded {
+        lu::chevron_up()
+    } else {
+        lu::chevron_down()
+    };
     let heading = row![
-        column![
-            text!("{} bugs", epic.total).size(29),
-            text(epic.title).size(18),
-        ]
-        .spacing(8),
+        column![text(headline).size(29), text(epic.title.as_str()).size(18)].spacing(8),
         space::horizontal(),
-        button(container(icon(lu::ellipsis(), 16.0)).center(Fill))
+        button(container(icon(chevron, 16.0)).center(Fill))
             .width(36)
             .height(36)
             .padding(0)
             .style(style::icon_square)
-            .on_press(Message::Noop),
+            .on_press(Message::ToggleEpic(key.0, key.1)),
     ];
 
     let details = column![
-        detail_row("Closed", format!("{} of {}", epic.closed, epic.total)),
-        detail_row("Repository", epic.repo),
-        detail_row("Opened", epic.opened),
-        detail_row("Last Activity", epic.last_activity),
+        detail_row("Closed", format!("{} of {}", summary.closed, summary.total)),
+        detail_row("Repository", entry.info.root.display().to_string()),
+        detail_row("Opened", epics::format_date(&epic.created)),
+        detail_row("Last Activity", epics::format_date(&summary.last_activity)),
+        detail_row(
+            "In progress / Blocked",
+            format!("{} / {}", summary.in_progress, summary.blocked)
+        ),
     ]
     .spacing(18);
 
-    let labels = row(epic.labels.iter().map(|l| chip(*l))).spacing(8);
+    let labels = row(epic.labels.iter().map(|l| chip(l.as_str())))
+        .spacing(8)
+        .wrap()
+        .vertical_spacing(8);
+
+    let mut card = column![
+        heading,
+        split_progress(summary.ratio()),
+        details,
+        row![
+            labels,
+            space::horizontal(),
+            text(epic.human_id.as_str()).size(13).style(style::subtle)
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(28);
+
+    if expanded {
+        let children: Vec<Element<'a, Message>> = if summary.children.is_empty() {
+            vec![text("No tasks yet.").size(14).style(style::muted).into()]
+        } else {
+            summary
+                .children
+                .iter()
+                .map(|&c| child_row(&entry.issues[c]))
+                .collect()
+        };
+        card = card.push(column(children).spacing(12));
+    }
+
+    container(card)
+        .padding(28)
+        .width(Fill)
+        .style(style::card)
+        .into()
+}
+
+fn child_row(issue: &Issue) -> Element<'_, Message> {
+    let layer = match issue.layer {
+        Some(n) => format!("L{n}"),
+        None => "—".to_owned(),
+    };
+    row![
+        text(layer).size(13).style(style::subtle).width(32),
+        text(issue.human_id.as_str()).size(13).style(style::subtle),
+        text(issue.title.as_str()).size(14),
+        space::horizontal(),
+        state_badge(issue),
+    ]
+    .spacing(14)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn overview(app: &App) -> Element<'_, Message> {
+    let tracked: Vec<&RepoEntry> = app.repos.iter().filter(|e| e.info.has_git_bug).collect();
+    let header = row![
+        text("Overview").size(21),
+        text!("{} repositories", tracked.len())
+            .size(14)
+            .style(style::muted),
+    ]
+    .spacing(18)
+    .align_y(Alignment::Center);
+
+    let body: Element<'_, Message> = if tracked.is_empty() {
+        if app.discovering {
+            column((0..3).map(|_| skeleton_card())).spacing(16).into()
+        } else {
+            container(
+                text("No repositories with git-bug yet.")
+                    .size(14)
+                    .style(style::muted),
+            )
+            .padding(48)
+            .center_x(Fill)
+            .style(style::card)
+            .into()
+        }
+    } else {
+        row(tracked.into_iter().map(|e| overview_card(e, app.spin)))
+            .spacing(16)
+            .wrap()
+            .vertical_spacing(16)
+            .into()
+    };
+
+    column![
+        header,
+        scrollable(container(body).padding(Padding {
+            bottom: 24.0,
+            right: 10.0,
+            ..Padding::ZERO
+        }))
+        .height(Fill)
+        .style(style::scroll)
+    ]
+    .spacing(28)
+    .width(Fill)
+    .into()
+}
+
+fn overview_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
+    let counts = epics::count_open(&entry.issues);
+    let ratio = if entry.issues.is_empty() {
+        0.0
+    } else {
+        entry.closed_count() as f32 / entry.issues.len() as f32
+    };
+
+    let heading = row![
+        column![
+            text!("{} open", counts.open()).size(29),
+            text(entry.info.name.as_str()).size(18),
+        ]
+        .spacing(8),
+        space::horizontal(),
+        status_badge(&entry.state, spin),
+    ];
+
+    let details = column![
+        detail_row("Open epics", counts.epics.to_string()),
+        detail_row("Open tasks", counts.tasks.to_string()),
+        detail_row("Open bugs", counts.bugs.to_string()),
+        detail_row("In progress", counts.in_progress.to_string()),
+        detail_row("Blocked", counts.blocked.to_string()),
+    ]
+    .spacing(14);
 
     container(
         column![
             heading,
-            split_progress(epic.ratio()),
+            split_progress(ratio),
             details,
-            row![
-                labels,
-                space::horizontal(),
-                text(epic.id).size(13).style(style::subtle)
-            ]
-            .align_y(Alignment::Center),
+            text(entry.info.root.display().to_string())
+                .size(13)
+                .style(style::subtle),
         ]
-        .spacing(28),
+        .spacing(24),
     )
     .padding(28)
-    .width(Fill)
+    .width(380)
     .style(style::card)
     .into()
 }
@@ -594,6 +792,27 @@ fn filter_bar(app: &App) -> Element<'_, Message> {
     .map(|(label, value)| toggle_chip(label, filter.state == value, Message::SetState(value))))
     .spacing(6);
 
+    let repo = repo_picker(app, filter, Message::PickRepo);
+
+    let search = text_input("Search title or id", &app.search)
+        .on_input(Message::SearchInput)
+        .size(14)
+        .padding([8, 12])
+        .width(260);
+
+    row![kinds, vdivider(), status, vdivider(), state, repo, search]
+        .spacing(14)
+        .align_y(Alignment::Center)
+        .wrap()
+        .vertical_spacing(10)
+        .into()
+}
+
+fn repo_picker<'a>(
+    app: &'a App,
+    filter: &Filter,
+    on_pick: fn(Option<PathBuf>) -> Message,
+) -> Element<'a, Message> {
     let mut choices = vec![RepoChoice {
         root: None,
         name: "All repositories".to_owned(),
@@ -609,21 +828,9 @@ fn filter_bar(app: &App) -> Element<'_, Message> {
         .and_then(|root| choices.iter().find(|c| c.root.as_ref() == Some(root)))
         .or_else(|| choices.first())
         .cloned();
-    let repo = pick_list(choices, selected, |c: RepoChoice| Message::PickRepo(c.root))
+    pick_list(choices, selected, move |c: RepoChoice| on_pick(c.root))
         .text_size(14)
-        .padding([7, 12]);
-
-    let search = text_input("Search title or id", &app.search)
-        .on_input(Message::SearchInput)
-        .size(14)
-        .padding([8, 12])
-        .width(260);
-
-    row![kinds, vdivider(), status, vdivider(), state, repo, search]
-        .spacing(14)
-        .align_y(Alignment::Center)
-        .wrap()
-        .vertical_spacing(10)
+        .padding([7, 12])
         .into()
 }
 

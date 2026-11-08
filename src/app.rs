@@ -1,10 +1,12 @@
 //! Application state and update loop. `update` and `view` never block: every git, git-bug and fs call runs in a `Task`.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gbtracker::cache::{self, Cache, Snapshot};
+use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{self, Filter, StateFilter, StatusFilter};
 use gbtracker::gitbug::{self, GitBugError, Issue, Kind, Status};
 use gbtracker::workspace::{self, RepoInfo, Root, RootKind, Workspace};
@@ -126,6 +128,13 @@ pub struct App {
     /// Raw search box content; `filter` only sees it once typing settles.
     pub search: String,
     pub roadmap: bool,
+    /// Status and repo only; the Epics page has no other controls.
+    pub epic_filter: Filter,
+    pub epics: Vec<EpicSummary>,
+    /// Expanded epic cards, keyed by repo root and epic id so they survive reloads.
+    pub expanded: HashSet<(PathBuf, String)>,
+    pub initials: String,
+    identity_asked: bool,
     /// Filtered (and, for the roadmap view, ordered) result, recomputed in `update`.
     pub rows: Vec<Row>,
     pub shown: usize,
@@ -149,6 +158,10 @@ pub enum Message {
     SearchInput(String),
     SearchSettled(u64),
     ToggleRoadmap,
+    SetEpicStatus(StatusFilter),
+    PickEpicRepo(Option<PathBuf>),
+    ToggleEpic(PathBuf, String),
+    Identified(Option<String>),
     ClearFilters,
     ShowMore,
     Discovered {
@@ -236,6 +249,11 @@ impl App {
             filter: Filter::default(),
             search: String::new(),
             roadmap: false,
+            epic_filter: Filter::default(),
+            epics: Vec::new(),
+            expanded: HashSet::new(),
+            initials: "?".to_owned(),
+            identity_asked: false,
             rows: Vec::new(),
             shown: PAGE_SIZE,
             search_seq: 0,
@@ -289,6 +307,17 @@ impl App {
                 })
                 .collect()
         };
+        self.refresh_epics();
+    }
+
+    fn refresh_epics(&mut self) {
+        let repos: Vec<(&Path, &[Issue])> = self
+            .repos
+            .iter()
+            .map(|e| (e.info.root.as_path(), e.issues.as_slice()))
+            .collect();
+        let summaries = epics::summarize(&repos, &self.epic_filter);
+        self.epics = summaries;
     }
 
     fn apply_filter(&mut self) {
@@ -374,6 +403,31 @@ impl App {
                     self.filter.status = StatusFilter::Open;
                 }
                 self.apply_filter();
+                Task::none()
+            }
+            Message::SetEpicStatus(status) => {
+                self.epic_filter.status = status;
+                self.refresh_epics();
+                Task::none()
+            }
+            Message::PickEpicRepo(root) => {
+                self.epic_filter.repos.clear();
+                self.epic_filter.repos.extend(root);
+                self.refresh_epics();
+                Task::none()
+            }
+            Message::ToggleEpic(root, id) => {
+                let key = (root, id);
+                if !self.expanded.remove(&key) {
+                    self.expanded.insert(key);
+                }
+                Task::none()
+            }
+            Message::Identified(name) => {
+                match name.as_deref().map(gitbug::initials) {
+                    Some(initials) => self.initials = initials,
+                    None => self.identity_asked = false,
+                }
                 Task::none()
             }
             Message::ClearFilters => {
@@ -470,6 +524,7 @@ impl App {
             .collect();
         let known: Vec<&PathBuf> = self.repos.iter().map(|e| &e.info.root).collect();
         self.filter.repos.retain(|r| known.contains(&r));
+        self.epic_filter.repos.retain(|r| known.contains(&r));
         self.refilter();
 
         let mut tasks = vec![self.persist_repos(found)];
@@ -487,6 +542,14 @@ impl App {
                 done: 0,
                 visible: true,
             });
+            if !self.identity_asked {
+                self.identity_asked = true;
+                let root = roots[0].clone();
+                tasks.push(Task::perform(
+                    async move { gitbug::current_user(&root).await.ok() },
+                    Message::Identified,
+                ));
+            }
             tasks.extend(roots.into_iter().map(|r| self.fingerprint_task(r)));
         }
         Task::batch(tasks)
@@ -793,6 +856,7 @@ mod tests {
         let mut app = App::from_parts(Workspace::default(), snapshot(names), None);
         app.discovering = true;
         app.epoch = 1;
+        app.identity_asked = true;
         let task = app.update(Message::Discovered {
             epoch: 1,
             repos: names.iter().map(|n| info(n)).collect(),
@@ -1059,6 +1123,87 @@ mod tests {
         assert_eq!(app.shown, 2 * PAGE_SIZE);
         app.send(Message::ToggleKind(Kind::Bug));
         assert_eq!(app.shown, PAGE_SIZE);
+    }
+
+    fn epic_app() -> App {
+        let mut app = booted(&["a"]);
+        let epic = Issue {
+            kind: Some(Kind::Epic),
+            ..titled("epic", Status::Open)
+        };
+        let kid = Issue {
+            kind: Some(Kind::Task),
+            epic: Some(epic.id.clone()),
+            ..titled("kid", Status::Closed)
+        };
+        app.send(Message::Fingerprinted {
+            epoch: 1,
+            root: info("a").root,
+            result: Ok("new".into()),
+        });
+        app.send(Message::Loaded {
+            epoch: 1,
+            root: info("a").root,
+            fingerprint: "new".into(),
+            result: Ok(vec![epic, kid]),
+        });
+        app
+    }
+
+    #[test]
+    fn epics_follow_loaded_data_and_their_own_filter() {
+        let mut app = epic_app();
+        assert_eq!(app.epics.len(), 1);
+        assert_eq!((app.epics[0].total, app.epics[0].closed), (1, 1));
+
+        app.send(Message::SetEpicStatus(StatusFilter::Closed));
+        assert!(app.epics.is_empty());
+        app.send(Message::SetEpicStatus(StatusFilter::All));
+        assert_eq!(app.epics.len(), 1);
+        assert_eq!(app.filter, Filter::default(), "issue filter untouched");
+
+        app.send(Message::PickEpicRepo(Some("/r/other".into())));
+        assert!(app.epics.is_empty());
+        app.send(Message::PickEpicRepo(None));
+        assert_eq!(app.epics.len(), 1);
+    }
+
+    #[test]
+    fn epic_expansion_toggles_per_repo_and_id() {
+        let mut app = epic_app();
+        let (root, id) = (info("a").root, "a".repeat(64));
+        app.send(Message::ToggleEpic(root.clone(), id.clone()));
+        assert!(app.expanded.contains(&(root.clone(), id.clone())));
+        app.send(Message::ToggleEpic(root, id));
+        assert!(app.expanded.is_empty());
+    }
+
+    #[test]
+    fn identity_sets_initials_and_failure_allows_a_retry() {
+        let mut app = booted(&["a"]);
+        assert_eq!(app.initials, "?");
+        app.send(Message::Identified(Some("Ada Lovelace".into())));
+        assert_eq!(app.initials, "AL");
+        app.send(Message::Identified(None));
+        assert_eq!(app.initials, "AL", "a failed lookup keeps the last name");
+        assert!(!app.identity_asked);
+    }
+
+    #[test]
+    fn discovery_asks_for_the_identity_once() {
+        let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
+        app.discovering = true;
+        app.epoch = 1;
+        let repos = vec![info("a"), info("b")];
+        let first = app.update(Message::Discovered {
+            epoch: 1,
+            repos: repos.clone(),
+        });
+        assert_eq!(first.units(), 3, "identity + one fingerprint per repo");
+        app.discovering = true;
+        app.epoch = 2;
+        let second = app.update(Message::Discovered { epoch: 2, repos });
+        assert_eq!(second.units(), 2);
     }
 
     #[test]

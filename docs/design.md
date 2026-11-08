@@ -1,6 +1,6 @@
 # gbtracker UI design
 
-Desktop app (Rust, iced 0.14) that wraps directories using git-bug. Visual target: `docs/proposal.jpg`. The current build is a **static mock**: the layout and theme are real, the data is not.
+Desktop app (Rust, iced 0.14) that wraps directories using git-bug. Visual target: `docs/proposal.jpg`. Repositories, Issues, Epics and Overview read real git-bug data; the other sections are placeholders.
 
 ## Run
 
@@ -17,8 +17,8 @@ GBTRACKER_THEME=dark cargo run    # dark (or use the moon/sun button in the top 
 | `src/theme/style.rs` | Style fns for `.style(...)`, plus `radius::*` |
 | `src/ui/components.rs` | Building blocks: pills, buttons, chip, dot, detail row, split progress |
 | `src/filter.rs` | `Filter`, pure `matches`, `/roadmap-open` ordering (`roadmap_order`) |
-| `src/ui/screen.rs` | Mock screen: top bar, sidebar, Epics page |
-| `src/mock.rs` | Sample data shaped like git-bug output |
+| `src/ui/screen.rs` | Screens: top bar, sidebar, Repositories, Issues, Epics, Overview |
+| `src/epics.rs` | `EpicSummary` (children, ratio, in-progress/blocked, last activity) and per-repo open counts |
 
 ## Theme rules
 
@@ -47,5 +47,3 @@ GBTRACKER_THEME=dark cargo run    # dark (or use the moon/sun button in the top 
 - **Dashed borders:** iced has none, so "Add Filters" uses a solid 1px `border`.
 - **Font:** uses the system sans. The proposal looks like Inter; to match it, bundle Inter with `.font(...)` and set `.default_font(...)`.
 - **Icons:** `lucide-iced` downloads Lucide at build time, so clean builds need network access.
-- **Wiring:** only the theme toggle and sidebar navigation do anything. Everything else sends `Message::Noop`. Non-Epics sections show a placeholder card.
-- **Real app:** replace `mock.rs` with a git-bug adapter (CLI `git bug ... --format json` or the GraphQL API). Keep the screens fed by plain structs so the UI never calls git-bug directly.

@@ -253,6 +253,27 @@ pub async fn show(root: &Path, full_id: &str) -> Result<IssueDetail, GitBugError
     Ok(detail)
 }
 
+/// Name of the identity git-bug acts as in `root`.
+pub async fn current_user(root: &Path) -> Result<String, GitBugError> {
+    let out = cli::run(root, &["user", "show", "--field", "name"]).await?;
+    Ok(out.trim().to_owned())
+}
+
+/// Up to two letters: first letters of the first two words, or the first two letters of a single word.
+pub fn initials(name: &str) -> String {
+    let mut words = name.split_whitespace();
+    let letters: String = match (words.next(), words.next()) {
+        (Some(a), Some(b)) => a.chars().take(1).chain(b.chars().take(1)).collect(),
+        (Some(a), None) => a.chars().take(2).collect(),
+        _ => String::new(),
+    };
+    if letters.is_empty() {
+        "?".to_owned()
+    } else {
+        letters.to_uppercase()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -287,6 +308,16 @@ mod tests {
         assert_eq!(bug.kind, Some(Kind::Bug));
         assert_eq!(bug.state, Some(State::Blocked));
         assert_eq!(bug.status, Status::Closed);
+    }
+
+    #[test]
+    fn initials_from_name() {
+        assert_eq!(initials("Ada Lovelace"), "AL");
+        assert_eq!(initials("  ada   king lovelace "), "AK");
+        assert_eq!(initials("ARKye03"), "AR");
+        assert_eq!(initials("x"), "X");
+        assert_eq!(initials(""), "?");
+        assert_eq!(initials("  \n"), "?");
     }
 
     #[test]
