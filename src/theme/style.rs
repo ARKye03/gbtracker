@@ -81,6 +81,14 @@ pub fn chip(theme: &Theme) -> container::Style {
     }
 }
 
+/// Dims the page behind a modal sheet.
+pub fn scrim(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.45).into()),
+        ..container::Style::default()
+    }
+}
+
 pub fn divider(theme: &Theme) -> container::Style {
     let t = Tokens::of(theme);
     container::Style {

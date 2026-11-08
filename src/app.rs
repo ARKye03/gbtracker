@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use gbtracker::cache::{self, Cache, Snapshot};
 use gbtracker::detail::{DetailCache, LoadedDetail};
+use gbtracker::done::{self, EpicCandidate, Report};
 use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{self, Filter, StateFilter, StatusFilter};
 use gbtracker::gitbug::{self, GitBugError, Issue, IssueDetail, Kind, Status, WriteOp};
@@ -145,6 +146,69 @@ impl DetailPane {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DonePhase {
+    Loading,
+    Failed,
+    Choose,
+    Closing,
+    Closed,
+}
+
+/// The Roadmap Done sheet for one repo. Bugs close first; epics follow once every close has settled.
+#[derive(Debug, Clone)]
+pub struct DoneSheet {
+    pub root: PathBuf,
+    pub name: String,
+    pub phase: DonePhase,
+    pub error: Option<String>,
+    pub report: Option<Report>,
+    pub picked: HashSet<String>,
+    /// Outcome per closed row, ticked in as each close completes.
+    pub results: HashMap<String, Result<(), String>>,
+    seq: u64,
+    waiting: HashSet<String>,
+    epic_plan: Vec<EpicCandidate>,
+    epics_started: bool,
+}
+
+impl DoneSheet {
+    fn loading(root: PathBuf, name: String, seq: u64) -> Self {
+        DoneSheet {
+            root,
+            name,
+            phase: DonePhase::Loading,
+            error: None,
+            report: None,
+            picked: HashSet::new(),
+            results: HashMap::new(),
+            seq,
+            waiting: HashSet::new(),
+            epic_plan: Vec::new(),
+            epics_started: false,
+        }
+    }
+
+    pub fn is_waiting(&self, id: &str) -> bool {
+        self.waiting.contains(id)
+    }
+
+    /// Rows that will be closed with the current ticks.
+    pub fn selected_count(&self) -> usize {
+        self.report.as_ref().map_or(0, |r| {
+            let (bugs, epics) = r.chosen(&self.picked);
+            bugs.len() + epics.len()
+        })
+    }
+
+    fn blocker(&self, epic: &EpicCandidate) -> Option<String> {
+        epic.needs
+            .iter()
+            .find(|c| !matches!(self.results.get(&c.id), Some(Ok(()))))
+            .map(|c| c.human_id.clone())
+    }
+}
+
 pub struct App {
     pub mode: Mode,
     pub section: Section,
@@ -173,6 +237,8 @@ pub struct App {
     /// Unsent comment text per issue, kept across pane switches.
     pub drafts: HashMap<(PathBuf, String), text_editor::Content>,
     writes: WriteQueue,
+    pub done: Option<DoneSheet>,
+    done_seq: u64,
     pub initials: String,
     identity_asked: bool,
     /// Filtered (and, for the roadmap view, ordered) result, recomputed in `update`.
@@ -233,6 +299,15 @@ pub enum Message {
         id: String,
     },
     Copy(String),
+    OpenDone(PathBuf),
+    DoneFound {
+        seq: u64,
+        result: Result<Box<Report>, String>,
+    },
+    ToggleDone(String),
+    PickDone(bool),
+    RunDone,
+    DismissDone,
     Identified(Option<String>),
     ClearFilters,
     ShowMore,
@@ -330,6 +405,8 @@ impl App {
             write_errors: HashMap::new(),
             drafts: HashMap::new(),
             writes: WriteQueue::default(),
+            done: None,
+            done_seq: 0,
             initials: "?".to_owned(),
             identity_asked: false,
             rows: Vec::new(),
@@ -514,7 +591,9 @@ impl App {
                 }
             }
             Message::CloseDetail => {
-                self.detail = None;
+                if self.done.take().is_none() {
+                    self.detail = None;
+                }
                 Task::none()
             }
             Message::DetailLoaded {
@@ -575,6 +654,33 @@ impl App {
                 self.start_write(root, id, WriteOp::Comment(body))
             }
             Message::Copy(text) => clipboard::write(text),
+            Message::OpenDone(root) => self.open_done(root),
+            Message::DoneFound { seq, result } => {
+                self.on_done_found(seq, result);
+                Task::none()
+            }
+            Message::ToggleDone(id) => {
+                if let Some(sheet) = self.done.as_mut().filter(|s| s.phase == DonePhase::Choose)
+                    && !sheet.picked.remove(&id)
+                {
+                    sheet.picked.insert(id);
+                }
+                Task::none()
+            }
+            Message::PickDone(all) => {
+                if let Some(sheet) = self.done.as_mut().filter(|s| s.phase == DonePhase::Choose) {
+                    sheet.picked = match (&sheet.report, all) {
+                        (Some(report), true) => report.all_ids(),
+                        _ => HashSet::new(),
+                    };
+                }
+                Task::none()
+            }
+            Message::RunDone => self.run_done(),
+            Message::DismissDone => {
+                self.done = None;
+                Task::none()
+            }
             Message::Identified(name) => {
                 match name.as_deref().map(gitbug::initials) {
                     Some(initials) => self.initials = initials,
@@ -724,8 +830,25 @@ impl App {
         )
     }
 
-    /// A failed write keeps the local copy (a partly applied one is picked up by the next fingerprint check); a successful one replaces the issue everywhere it is held.
     fn on_written(
+        &mut self,
+        root: PathBuf,
+        id: String,
+        op: WriteOp,
+        result: Result<Box<IssueDetail>, String>,
+    ) -> Task<Message> {
+        let outcome = result.as_ref().map(|_| ()).map_err(Clone::clone);
+        let closed = matches!(op, WriteOp::Close);
+        let applied = self.apply_written(root.clone(), id.clone(), op, result);
+        if closed {
+            Task::batch([applied, self.done_progress(&root, &id, outcome)])
+        } else {
+            applied
+        }
+    }
+
+    /// A failed write keeps the local copy (a partly applied one is picked up by the next fingerprint check); a successful one replaces the issue everywhere it is held.
+    fn apply_written(
         &mut self,
         root: PathBuf,
         id: String,
@@ -781,6 +904,141 @@ impl App {
             Some((info, fp, issues)) => self.persist_issues(info, fp, issues),
             None => Task::none(),
         }
+    }
+
+    /// Opens at once in a loading state; candidates come from the issues already loaded.
+    fn open_done(&mut self, root: PathBuf) -> Task<Message> {
+        let Some(entry) = self
+            .repos
+            .iter()
+            .find(|e| e.info.root == root && e.fingerprint.is_some())
+        else {
+            return Task::none();
+        };
+        self.done_seq += 1;
+        let seq = self.done_seq;
+        let (name, issues) = (entry.info.name.clone(), entry.issues.clone());
+        self.done = Some(DoneSheet::loading(root.clone(), name, seq));
+        Task::perform(
+            async move {
+                done::find(&root, &issues, None)
+                    .await
+                    .map(Box::new)
+                    .map_err(|e| e.to_string())
+            },
+            move |result| Message::DoneFound { seq, result },
+        )
+    }
+
+    fn on_done_found(&mut self, seq: u64, result: Result<Box<Report>, String>) {
+        let Some(sheet) = self
+            .done
+            .as_mut()
+            .filter(|s| s.seq == seq && s.phase == DonePhase::Loading)
+        else {
+            return;
+        };
+        match result {
+            Ok(report) => {
+                sheet.picked = report.all_ids();
+                sheet.report = Some(*report);
+                sheet.phase = DonePhase::Choose;
+            }
+            Err(msg) => {
+                sheet.error = Some(msg);
+                sheet.phase = DonePhase::Failed;
+            }
+        }
+    }
+
+    fn run_done(&mut self) -> Task<Message> {
+        let Some(sheet) = self.done.as_mut().filter(|s| s.phase == DonePhase::Choose) else {
+            return Task::none();
+        };
+        let Some(report) = &sheet.report else {
+            return Task::none();
+        };
+        let (bugs, epics) = report.chosen(&sheet.picked);
+        if bugs.is_empty() && epics.is_empty() {
+            return Task::none();
+        }
+        let bug_ids: Vec<String> = bugs.iter().map(|b| b.id.clone()).collect();
+        let epic_plan: Vec<EpicCandidate> = epics.into_iter().cloned().collect();
+        let root = sheet.root.clone();
+        sheet.phase = DonePhase::Closing;
+        sheet.epic_plan = epic_plan;
+        let mut tasks: Vec<Task<Message>> = bug_ids
+            .iter()
+            .map(|id| self.done_close(&root, id))
+            .collect();
+        tasks.push(self.done_settle());
+        Task::batch(tasks)
+    }
+
+    /// An issue with another write in flight fails its row at once instead of waiting for a result that never comes.
+    fn done_close(&mut self, root: &Path, id: &str) -> Task<Message> {
+        let busy = self.is_pending(root, id);
+        let Some(sheet) = self.done.as_mut() else {
+            return Task::none();
+        };
+        if busy {
+            sheet.results.insert(
+                id.to_owned(),
+                Err("another write on this issue is in flight".to_owned()),
+            );
+            return Task::none();
+        }
+        sheet.waiting.insert(id.to_owned());
+        self.start_write(root.to_owned(), id.to_owned(), WriteOp::Close)
+    }
+
+    fn done_progress(
+        &mut self,
+        root: &Path,
+        id: &str,
+        outcome: Result<(), String>,
+    ) -> Task<Message> {
+        let Some(sheet) = self.done.as_mut().filter(|s| s.root == root) else {
+            return Task::none();
+        };
+        if !sheet.waiting.remove(id) {
+            return Task::none();
+        }
+        sheet.results.insert(id.to_owned(), outcome);
+        self.done_settle()
+    }
+
+    /// Once every bug close has finished, closes the epics whose children all closed; the rest fail without a write.
+    fn done_settle(&mut self) -> Task<Message> {
+        let Some(sheet) = self.done.as_mut() else {
+            return Task::none();
+        };
+        if sheet.phase != DonePhase::Closing || !sheet.waiting.is_empty() {
+            return Task::none();
+        }
+        if sheet.epics_started {
+            sheet.phase = DonePhase::Closed;
+            return Task::none();
+        }
+        sheet.epics_started = true;
+        let root = sheet.root.clone();
+        let mut tasks = Vec::new();
+        for epic in std::mem::take(&mut sheet.epic_plan) {
+            let blocker = self.done.as_ref().and_then(|s| s.blocker(&epic));
+            match blocker {
+                Some(hid) => {
+                    if let Some(s) = self.done.as_mut() {
+                        s.results
+                            .insert(epic.id.clone(), Err(format!("child {hid} did not close")));
+                    }
+                }
+                None => tasks.push(self.done_close(&root, &epic.id)),
+            }
+        }
+        if let Some(s) = self.done.as_mut().filter(|s| s.waiting.is_empty()) {
+            s.phase = DonePhase::Closed;
+        }
+        Task::batch(tasks)
     }
 
     fn detail_task(&self, root: PathBuf, id: String, edited: String) -> Task<Message> {
@@ -839,6 +1097,13 @@ impl App {
             .is_some_and(|p| !known.contains(&&p.root))
         {
             self.detail = None;
+        }
+        if self
+            .done
+            .as_ref()
+            .is_some_and(|d| !known.contains(&&d.root))
+        {
+            self.done = None;
         }
         self.refilter();
 
@@ -1078,7 +1343,11 @@ impl App {
                 _ => None,
             }),
         ];
-        if self.is_busy() || !self.pending.is_empty() {
+        let sheet_busy = self
+            .done
+            .as_ref()
+            .is_some_and(|d| matches!(d.phase, DonePhase::Loading | DonePhase::Closing));
+        if self.is_busy() || !self.pending.is_empty() || sheet_busy {
             subs.push(time::every(SPIN_EVERY).map(|_| Message::Spin));
         }
         Subscription::batch(subs)
@@ -1781,6 +2050,204 @@ mod tests {
         app.epoch = 2;
         let second = app.update(Message::Discovered { epoch: 2, repos });
         assert_eq!(second.units(), 2);
+    }
+
+    fn done_id(c: char) -> String {
+        c.to_string().repeat(64)
+    }
+
+    fn candidate(c: char) -> done::Candidate {
+        done::Candidate {
+            id: done_id(c),
+            human_id: c.to_string().repeat(7),
+            title: format!("bug {c}"),
+            kind: Some(Kind::Task),
+            evidence: vec![],
+        }
+    }
+
+    fn done_report() -> Report {
+        let needs = ['b', 'c']
+            .iter()
+            .map(|&c| done::NeededChild {
+                id: done_id(c),
+                human_id: c.to_string().repeat(7),
+            })
+            .collect();
+        Report {
+            base: "main".into(),
+            refs: vec!["main".into()],
+            open_count: 3,
+            bugs: vec![candidate('b'), candidate('c')],
+            epics: vec![EpicCandidate {
+                id: done_id('e'),
+                human_id: "eeeeeee".into(),
+                title: "epic".into(),
+                children: 2,
+                needs,
+            }],
+        }
+    }
+
+    fn sheet_open() -> App {
+        let mut app = loaded(&[("one", Status::Open)]);
+        assert_eq!(app.update(Message::OpenDone(info("a").root)).units(), 1);
+        let seq = app.done.as_ref().unwrap().seq;
+        assert_eq!(app.done.as_ref().unwrap().phase, DonePhase::Loading);
+        app.send(Message::DoneFound {
+            seq,
+            result: Ok(Box::new(done_report())),
+        });
+        app
+    }
+
+    fn closed(c: char, result: Result<(), &str>) -> Message {
+        let mut issue = Issue {
+            id: done_id(c),
+            ..issue(Status::Closed)
+        };
+        issue.human_id = c.to_string().repeat(7);
+        Message::WriteDone {
+            root: info("a").root,
+            id: issue.id.clone(),
+            op: WriteOp::Close,
+            result: result.map_err(str::to_owned).map(|()| {
+                Box::new(IssueDetail {
+                    issue,
+                    body: "body".into(),
+                    comments: vec![],
+                })
+            }),
+        }
+    }
+
+    fn sheet(app: &App) -> &DoneSheet {
+        app.done.as_ref().unwrap()
+    }
+
+    #[test]
+    fn the_sheet_opens_loading_then_ticks_every_candidate() {
+        let app = sheet_open();
+        assert_eq!(sheet(&app).phase, DonePhase::Choose);
+        assert_eq!(sheet(&app).picked.len(), 3);
+        assert_eq!(sheet(&app).selected_count(), 3);
+    }
+
+    #[test]
+    fn the_sheet_needs_loaded_issues_and_ignores_stale_results() {
+        let mut app = booted(&["a"]);
+        app.repos[0].fingerprint = None;
+        assert_eq!(app.update(Message::OpenDone(info("a").root)).units(), 0);
+        assert!(app.done.is_none());
+
+        let mut app = loaded(&[("one", Status::Open)]);
+        let _ = app.update(Message::OpenDone(info("a").root));
+        let seq = sheet(&app).seq;
+        app.send(Message::DoneFound {
+            seq: seq + 1,
+            result: Ok(Box::new(done_report())),
+        });
+        assert_eq!(sheet(&app).phase, DonePhase::Loading);
+        app.send(Message::DoneFound {
+            seq,
+            result: Err("no base branch".into()),
+        });
+        assert_eq!(sheet(&app).phase, DonePhase::Failed);
+        assert!(sheet(&app).error.as_ref().unwrap().contains("base"));
+    }
+
+    #[test]
+    fn bugs_close_first_and_the_epic_follows_its_children() {
+        let mut app = sheet_open();
+        assert_eq!(app.update(Message::RunDone).units(), 2);
+        assert_eq!(sheet(&app).phase, DonePhase::Closing);
+        assert!(sheet(&app).is_waiting(&done_id('b')));
+        assert!(!sheet(&app).is_waiting(&done_id('e')));
+
+        assert_eq!(app.update(closed('b', Ok(()))).units(), 0);
+        assert_eq!(sheet(&app).results[&done_id('b')], Ok(()));
+        assert_eq!(sheet(&app).phase, DonePhase::Closing);
+
+        assert_eq!(app.update(closed('c', Ok(()))).units(), 1);
+        assert!(sheet(&app).is_waiting(&done_id('e')));
+        assert_eq!(sheet(&app).phase, DonePhase::Closing);
+
+        app.send(closed('e', Ok(())));
+        assert_eq!(sheet(&app).phase, DonePhase::Closed);
+        assert!(sheet(&app).results.values().all(Result::is_ok));
+        assert!(app.pending.is_empty());
+    }
+
+    #[test]
+    fn a_failed_child_keeps_the_epic_open_without_writing() {
+        let mut app = sheet_open();
+        let _ = app.update(Message::RunDone);
+        app.send(closed('b', Ok(())));
+        assert_eq!(app.update(closed('c', Err("locked"))).units(), 0);
+
+        let sheet = sheet(&app);
+        assert_eq!(sheet.phase, DonePhase::Closed);
+        assert!(sheet.results[&done_id('c')].is_err());
+        assert_eq!(
+            sheet.results[&done_id('e')],
+            Err("child ccccccc did not close".to_owned())
+        );
+        assert!(app.pending.is_empty());
+    }
+
+    #[test]
+    fn unticking_a_child_disables_its_epic() {
+        let mut app = sheet_open();
+        app.send(Message::ToggleDone(done_id('c')));
+        assert_eq!(sheet(&app).selected_count(), 1, "only bug b is chosen");
+        assert_eq!(app.update(Message::RunDone).units(), 1);
+        app.send(closed('b', Ok(())));
+        assert_eq!(sheet(&app).phase, DonePhase::Closed);
+        assert!(!sheet(&app).results.contains_key(&done_id('e')));
+
+        let mut app = sheet_open();
+        app.send(Message::PickDone(false));
+        assert_eq!(app.update(Message::RunDone).units(), 0, "nothing ticked");
+        assert_eq!(sheet(&app).phase, DonePhase::Choose);
+        app.send(Message::PickDone(true));
+        assert_eq!(sheet(&app).selected_count(), 3);
+    }
+
+    #[test]
+    fn a_row_with_another_write_in_flight_fails_at_once() {
+        let mut app = sheet_open();
+        app.pending.insert((info("a").root, done_id('b')));
+        assert_eq!(app.update(Message::RunDone).units(), 1);
+        assert!(sheet(&app).results[&done_id('b')].is_err());
+        assert_eq!(app.update(closed('c', Ok(()))).units(), 0);
+        assert_eq!(sheet(&app).phase, DonePhase::Closed);
+        assert!(sheet(&app).results[&done_id('e')].is_err());
+    }
+
+    #[test]
+    fn escape_closes_the_sheet_before_the_pane_and_a_dismissed_run_is_harmless() {
+        let mut app = sheet_open();
+        let _ = select(&mut app);
+        app.send(Message::CloseDetail);
+        assert!(app.done.is_none());
+        assert!(app.detail.is_some());
+
+        let mut app = sheet_open();
+        let _ = app.update(Message::RunDone);
+        app.send(Message::DismissDone);
+        assert_eq!(app.update(closed('b', Ok(()))).units(), 0);
+        assert!(app.done.is_none());
+    }
+
+    #[test]
+    fn dropping_the_repo_closes_its_sheet() {
+        let mut app = sheet_open();
+        app.epoch = 2;
+        app.send(Message::Discovered {
+            epoch: 2,
+            repos: vec![],
+        });
+        assert!(app.done.is_none());
     }
 
     #[test]

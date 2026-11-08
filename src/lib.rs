@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod detail;
+pub mod done;
 pub mod epics;
 pub mod filter;
 pub mod gitbug;

@@ -8,10 +8,11 @@ use iced::{Alignment, Element, Fill, Padding};
 use lucide_iced::icon as lu;
 
 use super::components::{
-    MEDIUM, chip, detail_row, dot, icon, icon_muted, icon_pill, labeled, primary_button,
-    secondary_button, skeleton, spinner_dot, split_progress, toggle_chip, top_pill, vdivider,
+    MEDIUM, chip, choice_button, detail_row, dot, icon, icon_muted, icon_pill, labeled,
+    primary_button, secondary_button, skeleton, spinner_dot, split_progress, toggle_chip, top_pill,
+    vdivider,
 };
-use super::detail;
+use super::{detail, done};
 use crate::Section;
 use crate::app::{App, LoadState, Message, RepoEntry, Row, ago};
 use crate::theme::{Mode, Tone, style};
@@ -35,7 +36,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         body = body.push(pane);
     }
 
-    container(
+    let page = container(
         column![
             top_bar(app),
             container(body)
@@ -59,8 +60,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
     })
     .width(Fill)
     .height(Fill)
-    .style(style::app)
-    .into()
+    .style(style::app);
+
+    if app.section == Section::Repositories {
+        done::overlay(app, page.into())
+    } else {
+        page.into()
+    }
 }
 
 fn top_bar(app: &App) -> Element<'_, Message> {
@@ -635,7 +641,7 @@ fn status_badge(state: &LoadState, spin: usize) -> Element<'static, Message> {
 }
 
 fn repo_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
-    let heading = row![
+    let mut heading = row![
         column![
             text(&entry.info.name).size(18),
             text(entry.info.root.display().to_string())
@@ -644,9 +650,20 @@ fn repo_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
         ]
         .spacing(4),
         space::horizontal(),
-        status_badge(&entry.state, spin),
     ]
+    .spacing(16)
     .align_y(Alignment::Center);
+    if entry.info.has_git_bug {
+        heading = heading.push(choice_button(
+            "Roadmap Done",
+            false,
+            entry
+                .fingerprint
+                .is_some()
+                .then(|| Message::OpenDone(entry.info.root.clone())),
+        ));
+    }
+    heading = heading.push(status_badge(&entry.state, spin));
 
     let detail: Element<'_, Message> = match &entry.state {
         LoadState::NoGitBug => text("git-bug is not initialised in this repository.")
