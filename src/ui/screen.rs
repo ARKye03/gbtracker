@@ -1,5 +1,5 @@
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use iced::widget::{
     button, column, container, lazy, pick_list, row, scrollable, space, text, text_input,
@@ -11,6 +11,7 @@ use super::components::{
     MEDIUM, chip, detail_row, dot, icon, icon_muted, icon_pill, labeled, primary_button,
     secondary_button, skeleton, spinner_dot, split_progress, toggle_chip, top_pill, vdivider,
 };
+use super::detail;
 use crate::Section;
 use crate::app::{App, LoadState, Message, RepoEntry, Row, ago};
 use crate::theme::{Mode, Tone, style};
@@ -27,7 +28,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
         Section::Overview => overview(app),
         other => content(other),
     };
-    let body = row![sidebar(app), page].spacing(32).height(Fill);
+    let mut body = row![sidebar(app), page].spacing(32).height(Fill);
+    if matches!(app.section, Section::Issues | Section::Epics)
+        && let Some(pane) = detail::view(app)
+    {
+        body = body.push(pane);
+    }
 
     container(
         column![
@@ -306,7 +312,10 @@ fn epic_card<'a>(app: &'a App, summary: &EpicSummary) -> Element<'a, Message> {
         lu::chevron_down()
     };
     let heading = row![
-        column![text(headline).size(29), text(epic.title.as_str()).size(18)].spacing(8),
+        button(column![text(headline).size(29), text(epic.title.as_str()).size(18)].spacing(8))
+            .padding(6)
+            .style(style::list_item)
+            .on_press(select(&entry.info.root, epic)),
         space::horizontal(),
         button(container(icon(chevron, 16.0)).center(Fill))
             .width(36)
@@ -354,7 +363,7 @@ fn epic_card<'a>(app: &'a App, summary: &EpicSummary) -> Element<'a, Message> {
             summary
                 .children
                 .iter()
-                .map(|&c| child_row(&entry.issues[c]))
+                .map(|&c| child_row(&entry.info.root, &entry.issues[c]))
                 .collect()
         };
         card = card.push(column(children).spacing(12));
@@ -367,20 +376,39 @@ fn epic_card<'a>(app: &'a App, summary: &EpicSummary) -> Element<'a, Message> {
         .into()
 }
 
-fn child_row(issue: &Issue) -> Element<'_, Message> {
-    let layer = match issue.layer {
+fn select(root: &Path, issue: &Issue) -> Message {
+    Message::SelectIssue {
+        root: root.to_owned(),
+        id: issue.id.clone(),
+    }
+}
+
+pub(super) fn layer_label(issue: &Issue) -> String {
+    match issue.layer {
         Some(n) => format!("L{n}"),
         None => "—".to_owned(),
-    };
-    row![
-        text(layer).size(13).style(style::subtle).width(32),
-        text(issue.human_id.as_str()).size(13).style(style::subtle),
-        text(issue.title.as_str()).size(14),
-        space::horizontal(),
-        state_badge(issue),
-    ]
-    .spacing(14)
-    .align_y(Alignment::Center)
+    }
+}
+
+fn child_row<'a>(root: &Path, issue: &'a Issue) -> Element<'a, Message> {
+    button(
+        row![
+            text(layer_label(issue))
+                .size(13)
+                .style(style::subtle)
+                .width(32),
+            text(issue.human_id.as_str()).size(13).style(style::subtle),
+            text(issue.title.as_str()).size(14),
+            space::horizontal(),
+            state_badge(issue),
+        ]
+        .spacing(14)
+        .align_y(Alignment::Center),
+    )
+    .width(Fill)
+    .padding([6, 8])
+    .style(style::list_item)
+    .on_press(select(root, issue))
     .into()
 }
 
@@ -838,6 +866,10 @@ fn issue_row<'a>(app: &'a App, row: &Row) -> Element<'a, Message> {
     let entry = &app.repos[row.repo];
     let issue = &entry.issues[row.issue];
     let depth = row.depth;
+    let selected = app
+        .detail
+        .as_ref()
+        .is_some_and(|p| p.root == entry.info.root && p.summary.id == issue.id);
     let key = (
         &entry.info.root,
         &entry.info.name,
@@ -845,11 +877,15 @@ fn issue_row<'a>(app: &'a App, row: &Row) -> Element<'a, Message> {
         &issue.edited,
         issue.status == Status::Closed,
         depth,
+        selected,
     );
-    lazy(key, move |_| issue_card(&entry.info.name, issue, depth)).into()
+    lazy(key, move |_| {
+        issue_card(&entry.info.root, &entry.info.name, issue, depth, selected)
+    })
+    .into()
 }
 
-fn kind_label(kind: Option<&Kind>) -> String {
+pub(super) fn kind_label(kind: Option<&Kind>) -> String {
     match kind {
         Some(Kind::Epic) => "epic".to_owned(),
         Some(Kind::Task) => "task".to_owned(),
@@ -859,7 +895,7 @@ fn kind_label(kind: Option<&Kind>) -> String {
     }
 }
 
-fn state_badge(issue: &Issue) -> Element<'static, Message> {
+pub(super) fn state_badge(issue: &Issue) -> Element<'static, Message> {
     let (label, tone) = match (&issue.status, &issue.state) {
         (Status::Closed, _) => ("Closed", None),
         (_, Some(State::InProgress)) => ("In progress", Some(Tone::Success)),
@@ -881,7 +917,13 @@ fn state_badge(issue: &Issue) -> Element<'static, Message> {
         .into()
 }
 
-fn issue_card(repo: &str, issue: &Issue, depth: usize) -> Element<'static, Message> {
+fn issue_card(
+    root: &Path,
+    repo: &str,
+    issue: &Issue,
+    depth: usize,
+    selected: bool,
+) -> Element<'static, Message> {
     let labels = row(issue
         .labels
         .iter()
@@ -901,7 +943,7 @@ fn issue_card(repo: &str, issue: &Issue, depth: usize) -> Element<'static, Messa
     .spacing(12)
     .align_y(Alignment::Center);
 
-    let card = container(
+    let card = button(
         row![
             chip(kind_label(issue.kind.as_ref())),
             column![text(issue.title.clone()).size(15).font(MEDIUM), meta].spacing(6),
@@ -913,7 +955,8 @@ fn issue_card(repo: &str, issue: &Issue, depth: usize) -> Element<'static, Messa
     )
     .padding([14, 20])
     .width(Fill)
-    .style(style::card);
+    .style(style::card_button(selected))
+    .on_press(select(root, issue));
 
     container(card)
         .padding(Padding {

@@ -238,6 +238,45 @@ pub fn outline(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+/// A whole card that can be pressed; the open one gets an accent outline.
+pub fn card_button(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let t = Tokens::of(theme);
+        let bg = match status {
+            button::Status::Hovered | button::Status::Pressed => t.fill.scale_alpha(0.5),
+            _ => t.surface,
+        };
+        let outline = if selected {
+            Border {
+                color: t.accent,
+                width: 1.5,
+                radius: radius::XL.into(),
+            }
+        } else {
+            border::rounded(radius::XL)
+        };
+        button::Style {
+            border: outline,
+            shadow: soft_shadow(&t),
+            ..filled(bg, t.text, radius::XL)
+        }
+    }
+}
+
+/// Transparent row that lights up on hover.
+pub fn list_item(theme: &Theme, status: button::Status) -> button::Style {
+    let t = Tokens::of(theme);
+    match status {
+        button::Status::Hovered | button::Status::Pressed => {
+            filled(t.fill.scale_alpha(0.5), t.text, radius::MD)
+        }
+        _ => button::Style {
+            text_color: t.text,
+            ..button::Style::default()
+        },
+    }
+}
+
 pub fn icon_square(theme: &Theme, status: button::Status) -> button::Style {
     let t = Tokens::of(theme);
     let bg = match status {

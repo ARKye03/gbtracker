@@ -2,15 +2,18 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gbtracker::cache::{self, Cache, Snapshot};
+use gbtracker::detail::{DetailCache, LoadedDetail};
 use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{self, Filter, StateFilter, StatusFilter};
-use gbtracker::gitbug::{self, GitBugError, Issue, Kind, Status};
+use gbtracker::gitbug::{self, GitBugError, Issue, IssueDetail, Kind, Status};
 use gbtracker::workspace::{self, RepoInfo, Root, RootKind, Workspace};
-use iced::{Element, Subscription, Task, Theme, event, time, window};
+use iced::keyboard::{self, key::Named};
+use iced::{Element, Subscription, Task, Theme, clipboard, event, time, window};
 use tokio::sync::Semaphore;
 
 use crate::theme::Mode;
@@ -114,6 +117,27 @@ pub struct Batch {
     pub visible: bool,
 }
 
+#[derive(Debug, Clone)]
+pub enum DetailState {
+    Loading,
+    Ready(Rc<LoadedDetail>),
+    Failed(String),
+}
+
+/// The open issue pane. `summary` is the list row the pane was opened from; its `edited` decides what to fetch.
+#[derive(Debug, Clone)]
+pub struct DetailPane {
+    pub root: PathBuf,
+    pub summary: Issue,
+    pub state: DetailState,
+}
+
+impl DetailPane {
+    fn is(&self, root: &Path, id: &str, edited: &str) -> bool {
+        self.root == root && self.summary.id == id && self.summary.edited == edited
+    }
+}
+
 pub struct App {
     pub mode: Mode,
     pub section: Section,
@@ -133,6 +157,8 @@ pub struct App {
     pub epics: Vec<EpicSummary>,
     /// Expanded epic cards, keyed by repo root and epic id so they survive reloads.
     pub expanded: HashSet<(PathBuf, String)>,
+    pub detail: Option<DetailPane>,
+    detail_cache: DetailCache,
     pub initials: String,
     identity_asked: bool,
     /// Filtered (and, for the roadmap view, ordered) result, recomputed in `update`.
@@ -161,6 +187,18 @@ pub enum Message {
     SetEpicStatus(StatusFilter),
     PickEpicRepo(Option<PathBuf>),
     ToggleEpic(PathBuf, String),
+    SelectIssue {
+        root: PathBuf,
+        id: String,
+    },
+    CloseDetail,
+    DetailLoaded {
+        root: PathBuf,
+        id: String,
+        edited: String,
+        result: Result<Box<IssueDetail>, String>,
+    },
+    Copy(String),
     Identified(Option<String>),
     ClearFilters,
     ShowMore,
@@ -252,6 +290,8 @@ impl App {
             epic_filter: Filter::default(),
             epics: Vec::new(),
             expanded: HashSet::new(),
+            detail: None,
+            detail_cache: DetailCache::default(),
             initials: "?".to_owned(),
             identity_asked: false,
             rows: Vec::new(),
@@ -423,6 +463,54 @@ impl App {
                 }
                 Task::none()
             }
+            Message::SelectIssue { root, id } => {
+                let issue = self
+                    .repos
+                    .iter()
+                    .find(|e| e.info.root == root)
+                    .and_then(|e| e.issues.iter().find(|i| i.id == id))
+                    .cloned();
+                match issue {
+                    Some(issue) => self.open_detail(root, issue),
+                    None => Task::none(),
+                }
+            }
+            Message::CloseDetail => {
+                self.detail = None;
+                Task::none()
+            }
+            Message::DetailLoaded {
+                root,
+                id,
+                edited,
+                result,
+            } => {
+                match result {
+                    Ok(detail) => {
+                        let loaded = Rc::new(LoadedDetail::new(*detail));
+                        self.detail_cache.insert(
+                            root.clone(),
+                            id.clone(),
+                            edited.clone(),
+                            loaded.clone(),
+                        );
+                        if let Some(pane) =
+                            self.detail.as_mut().filter(|p| p.is(&root, &id, &edited))
+                        {
+                            pane.state = DetailState::Ready(loaded);
+                        }
+                    }
+                    Err(msg) => {
+                        if let Some(pane) =
+                            self.detail.as_mut().filter(|p| p.is(&root, &id, &edited))
+                        {
+                            pane.state = DetailState::Failed(msg);
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Message::Copy(text) => clipboard::write(text),
             Message::Identified(name) => {
                 match name.as_deref().map(gitbug::initials) {
                     Some(initials) => self.initials = initials,
@@ -495,6 +583,69 @@ impl App {
         }
     }
 
+    /// Shows the pane at once from the in-memory summary; fetches only when nothing current is cached or in flight.
+    fn open_detail(&mut self, root: PathBuf, issue: Issue) -> Task<Message> {
+        let same = self.detail.as_ref().is_some_and(|p| {
+            p.is(&root, &issue.id, &issue.edited) && !matches!(p.state, DetailState::Failed(_))
+        });
+        if same {
+            return Task::none();
+        }
+        if let Some(cached) = self.detail_cache.get(&root, &issue.id, &issue.edited) {
+            self.detail = Some(DetailPane {
+                root,
+                summary: issue,
+                state: DetailState::Ready(cached),
+            });
+            return Task::none();
+        }
+        let (id, edited) = (issue.id.clone(), issue.edited.clone());
+        self.detail = Some(DetailPane {
+            root: root.clone(),
+            summary: issue,
+            state: DetailState::Loading,
+        });
+        self.detail_task(root, id, edited)
+    }
+
+    /// Re-opens the pane when a reload brought a newer edit of the shown issue.
+    fn sync_detail(&mut self, root: &Path) -> Task<Message> {
+        let Some(pane) = self.detail.as_ref().filter(|p| p.root == root) else {
+            return Task::none();
+        };
+        let live = self
+            .repos
+            .iter()
+            .find(|e| e.info.root == root)
+            .and_then(|e| e.issues.iter().find(|i| i.id == pane.summary.id))
+            .filter(|i| i.edited != pane.summary.edited)
+            .cloned();
+        match live {
+            Some(issue) => self.open_detail(root.to_owned(), issue),
+            None => Task::none(),
+        }
+    }
+
+    fn detail_task(&self, root: PathBuf, id: String, edited: String) -> Task<Message> {
+        let permits = Arc::clone(&self.permits);
+        Task::perform(
+            async move {
+                let _permit = permits.acquire_owned().await;
+                let result = gitbug::show(&root, &id)
+                    .await
+                    .map(Box::new)
+                    .map_err(|e| e.to_string());
+                (root, id, edited, result)
+            },
+            |(root, id, edited, result)| Message::DetailLoaded {
+                root,
+                id,
+                edited,
+                result,
+            },
+        )
+    }
+
     fn on_discovered(&mut self, epoch: u64, found: Vec<RepoInfo>) -> Task<Message> {
         if epoch != self.epoch {
             return Task::none();
@@ -525,6 +676,13 @@ impl App {
         let known: Vec<&PathBuf> = self.repos.iter().map(|e| &e.info.root).collect();
         self.filter.repos.retain(|r| known.contains(&r));
         self.epic_filter.repos.retain(|r| known.contains(&r));
+        if self
+            .detail
+            .as_ref()
+            .is_some_and(|p| !known.contains(&&p.root))
+        {
+            self.detail = None;
+        }
         self.refilter();
 
         let mut tasks = vec![self.persist_repos(found)];
@@ -612,7 +770,10 @@ impl App {
                 entry.fingerprint = Some(fingerprint.clone());
                 let (info, issues) = (entry.info.clone(), entry.issues.clone());
                 self.refilter();
-                self.persist_issues(info, fingerprint, issues)
+                Task::batch([
+                    self.persist_issues(info, fingerprint, issues),
+                    self.sync_detail(&root),
+                ])
             }
             Err(LoadFailure::Locked) => {
                 entry.state = LoadState::Locked;
@@ -751,8 +912,12 @@ impl App {
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![
             time::every(TRACK_EVERY).map(|_| Message::Tick),
-            event::listen_with(|event, _, _| match event {
+            event::listen_with(|event, status, _| match event {
                 event::Event::Window(window::Event::Focused) => Some(Message::Refocused),
+                event::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(Named::Escape),
+                    ..
+                }) if status == event::Status::Ignored => Some(Message::CloseDetail),
                 _ => None,
             }),
         ];
@@ -1176,6 +1341,156 @@ mod tests {
         assert!(app.expanded.contains(&(root.clone(), id.clone())));
         app.send(Message::ToggleEpic(root, id));
         assert!(app.expanded.is_empty());
+    }
+
+    fn select(app: &mut App) -> Task<Message> {
+        app.update(Message::SelectIssue {
+            root: info("a").root,
+            id: "a".repeat(64),
+        })
+    }
+
+    fn detail_msg(app: &App, edited: &str, body: &str) -> Message {
+        let mut issue = app.repos[0].issues[0].clone();
+        issue.edited = edited.into();
+        Message::DetailLoaded {
+            root: info("a").root,
+            id: issue.id.clone(),
+            edited: edited.into(),
+            result: Ok(Box::new(IssueDetail {
+                issue,
+                body: body.into(),
+                comments: vec![],
+            })),
+        }
+    }
+
+    #[test]
+    fn selecting_opens_a_loading_pane_and_emits_one_load() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        assert!(app.detail.is_none());
+        assert_eq!(select(&mut app).units(), 1);
+        let pane = app.detail.as_ref().unwrap();
+        assert!(matches!(pane.state, DetailState::Loading));
+        assert_eq!(pane.summary.title, "one");
+        assert_eq!(pane.root, info("a").root);
+
+        assert_eq!(select(&mut app).units(), 0, "already loading");
+    }
+
+    #[test]
+    fn loaded_detail_is_stored_for_its_repo_and_id() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        let _ = select(&mut app);
+        let msg = detail_msg(&app, "", "## Hi\n\n```rs\nlet x = 1;\n```");
+        app.send(msg);
+        let Some(DetailState::Ready(loaded)) = app.detail.as_ref().map(|p| &p.state) else {
+            panic!("expected a ready pane");
+        };
+        assert_eq!(loaded.body.items().len(), 2);
+        let root = info("a").root;
+        assert!(app.detail_cache.get(&root, &"a".repeat(64), "").is_some());
+        assert!(
+            app.detail_cache
+                .get(&info("b").root, &"a".repeat(64), "")
+                .is_none()
+        );
+        assert!(app.detail_cache.get(&root, "other", "").is_none());
+    }
+
+    #[test]
+    fn reselecting_an_unchanged_issue_emits_no_task() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        let _ = select(&mut app);
+        let msg = detail_msg(&app, "", "body");
+        app.send(msg);
+
+        assert_eq!(select(&mut app).units(), 0, "pane already current");
+        app.send(Message::CloseDetail);
+        assert!(app.detail.is_none());
+        assert_eq!(select(&mut app).units(), 0, "served from the cache");
+        assert!(matches!(
+            app.detail.as_ref().unwrap().state,
+            DetailState::Ready(_)
+        ));
+    }
+
+    #[test]
+    fn a_newer_edit_time_refetches() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        let _ = select(&mut app);
+        let msg = detail_msg(&app, "", "old");
+        app.send(msg);
+
+        app.repos[0].issues[0].edited = "2026-11-09T00:00:00Z".into();
+        assert_eq!(select(&mut app).units(), 1);
+        assert!(matches!(
+            app.detail.as_ref().unwrap().state,
+            DetailState::Loading
+        ));
+    }
+
+    #[test]
+    fn list_reload_with_a_newer_edit_refreshes_the_open_pane() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        let _ = select(&mut app);
+        let msg = detail_msg(&app, "", "old");
+        app.send(msg);
+
+        let mut newer = app.repos[0].issues[0].clone();
+        newer.edited = "2026-11-09T00:00:00Z".into();
+        app.epoch = 2;
+        let task = app.update(Message::Loaded {
+            epoch: 2,
+            root: info("a").root,
+            fingerprint: "newer".into(),
+            result: Ok(vec![newer]),
+        });
+        assert_eq!(task.units(), 1);
+        assert!(matches!(
+            app.detail.as_ref().unwrap().state,
+            DetailState::Loading
+        ));
+    }
+
+    #[test]
+    fn failed_load_can_be_retried_and_stale_results_are_ignored() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        let _ = select(&mut app);
+        app.send(Message::DetailLoaded {
+            root: info("a").root,
+            id: "a".repeat(64),
+            edited: "stale".into(),
+            result: Err("nope".into()),
+        });
+        assert!(matches!(
+            app.detail.as_ref().unwrap().state,
+            DetailState::Loading
+        ));
+
+        app.send(Message::DetailLoaded {
+            root: info("a").root,
+            id: "a".repeat(64),
+            edited: String::new(),
+            result: Err("nope".into()),
+        });
+        assert!(matches!(
+            app.detail.as_ref().unwrap().state,
+            DetailState::Failed(_)
+        ));
+        assert_eq!(select(&mut app).units(), 1);
+    }
+
+    #[test]
+    fn dropping_the_repo_closes_its_pane() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        let _ = select(&mut app);
+        app.epoch = 2;
+        app.send(Message::Discovered {
+            epoch: 2,
+            repos: vec![],
+        });
+        assert!(app.detail.is_none());
     }
 
     #[test]

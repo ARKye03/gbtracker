@@ -97,6 +97,28 @@ pub fn summarize(repos: &[(&Path, &[Issue])], filter: &Filter) -> Vec<EpicSummar
     out.into_iter().map(|(_, summary)| summary).collect()
 }
 
+/// Non-epic issues labelled with `epic`'s id, ordered by layer; unlayered last.
+pub fn children_of(issues: &[Issue], epic: &Issue) -> Vec<usize> {
+    if epic.kind != Some(Kind::Epic) {
+        return Vec::new();
+    }
+    let mut kids: Vec<usize> = issues
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.kind != Some(Kind::Epic) && i.epic.as_deref() == Some(epic.id.as_str()))
+        .map(|(pos, _)| pos)
+        .collect();
+    kids.sort_by_key(|&c| issues[c].layer.unwrap_or(u32::MAX));
+    kids
+}
+
+pub fn parent_of<'a>(issues: &'a [Issue], issue: &Issue) -> Option<&'a Issue> {
+    let id = issue.epic.as_deref()?;
+    issues
+        .iter()
+        .find(|i| i.kind == Some(Kind::Epic) && i.id == id)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RepoCounts {
     pub epics: usize,
@@ -409,5 +431,20 @@ mod tests {
         assert_eq!(format_date("2026-05-31T00:00:00Z"), "May 31, 2026");
         assert_eq!(format_date(""), "—");
         assert_eq!(format_date("2026-13-01T00:00:00Z"), "—");
+    }
+
+    #[test]
+    fn children_and_parent_lookups() {
+        let epic = issue("a", Kind::Epic);
+        let late = child("b", &epic, None);
+        let first = child("c", &epic, Some(1));
+        let stray = issue("d", Kind::Task);
+        let issues = [epic.clone(), late, first.clone(), stray.clone()];
+
+        assert_eq!(children_of(&issues, &epic), [2, 1]);
+        assert!(children_of(&issues, &first).is_empty());
+        assert_eq!(parent_of(&issues, &first), Some(&epic));
+        assert_eq!(parent_of(&issues, &stray), None);
+        assert_eq!(parent_of(&issues, &epic), None);
     }
 }
