@@ -54,18 +54,38 @@ pub fn icon_pill<'a, M: Clone + 'a>(svg: Svg<'a>, on_press: M) -> Element<'a, M>
 }
 
 pub fn primary_button<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Element<'a, M> {
+    primary_button_maybe(label, Some(on_press))
+}
+
+pub fn primary_button_maybe<'a, M: Clone + 'a>(
+    label: &'a str,
+    on_press: Option<M>,
+) -> Element<'a, M> {
     button(text(label).size(15).font(MEDIUM))
         .padding([11, 18])
         .style(style::primary)
-        .on_press(on_press)
+        .on_press_maybe(on_press)
         .into()
 }
 
 pub fn secondary_button<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Element<'a, M> {
+    choice_button(label, false, Some(on_press))
+}
+
+/// Primary when `active`, secondary otherwise; `None` renders it disabled.
+pub fn choice_button<'a, M: Clone + 'a>(
+    label: &'a str,
+    active: bool,
+    on_press: Option<M>,
+) -> Element<'a, M> {
     button(text(label).size(15))
         .padding([11, 18])
-        .style(style::secondary)
-        .on_press(on_press)
+        .style(if active {
+            style::primary
+        } else {
+            style::secondary
+        })
+        .on_press_maybe(on_press)
         .into()
 }
 

@@ -17,7 +17,7 @@ use crate::app::{App, LoadState, Message, RepoEntry, Row, ago};
 use crate::theme::{Mode, Tone, style};
 use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{Filter, StateFilter, StatusFilter};
-use gbtracker::gitbug::{Issue, Kind, State, Status};
+use gbtracker::gitbug::{Issue, Kind, State, Status, WriteOp};
 use gbtracker::workspace::{Root, RootKind};
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -870,6 +870,7 @@ fn issue_row<'a>(app: &'a App, row: &Row) -> Element<'a, Message> {
         .detail
         .as_ref()
         .is_some_and(|p| p.root == entry.info.root && p.summary.id == issue.id);
+    let pending = app.is_pending(&entry.info.root, &issue.id);
     let key = (
         &entry.info.root,
         &entry.info.name,
@@ -878,9 +879,17 @@ fn issue_row<'a>(app: &'a App, row: &Row) -> Element<'a, Message> {
         issue.status == Status::Closed,
         depth,
         selected,
+        pending.then_some(app.spin),
     );
     lazy(key, move |_| {
-        issue_card(&entry.info.root, &entry.info.name, issue, depth, selected)
+        issue_card(
+            &entry.info.root,
+            &entry.info.name,
+            issue,
+            depth,
+            selected,
+            pending.then_some(app.spin),
+        )
     })
     .into()
 }
@@ -923,6 +932,7 @@ fn issue_card(
     issue: &Issue,
     depth: usize,
     selected: bool,
+    pending: Option<usize>,
 ) -> Element<'static, Message> {
     let labels = row(issue
         .labels
@@ -958,7 +968,27 @@ fn issue_card(
     .style(style::card_button(selected))
     .on_press(select(root, issue));
 
-    container(card)
+    let (op, glyph) = if issue.status == Status::Closed {
+        (WriteOp::Reopen, lu::rotate_ccw())
+    } else {
+        (WriteOp::Close, lu::circle_check())
+    };
+    let toggle: Element<'static, Message> = match pending {
+        Some(phase) => container(spinner_dot(phase)).center(36).into(),
+        None => button(container(icon(glyph, 16.0)).center(Fill))
+            .width(36)
+            .height(36)
+            .padding(0)
+            .style(style::icon_square)
+            .on_press(Message::Write {
+                root: root.to_owned(),
+                id: issue.id.clone(),
+                op,
+            })
+            .into(),
+    };
+
+    container(row![card, toggle].spacing(8).align_y(Alignment::Center))
         .padding(Padding {
             left: depth as f32 * 32.0,
             ..Padding::ZERO

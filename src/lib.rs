@@ -6,3 +6,4 @@ pub mod gitbug;
 #[cfg(test)]
 mod testutil;
 pub mod workspace;
+pub mod writes;

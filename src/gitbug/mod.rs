@@ -1,8 +1,11 @@
 mod cli;
+mod write;
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
+pub use write::{StateTarget, WriteOp, apply, close, comment, reopen, set_state};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitBugError {
@@ -18,6 +21,10 @@ pub enum GitBugError {
     InvalidId(String),
     #[error("git-bug returned bug {got} for requested id {requested}")]
     IdMismatch { requested: String, got: String },
+    #[error("issue {0} is closed; reopen it first")]
+    Closed(String),
+    #[error("comment is empty")]
+    EmptyComment,
     #[error("unexpected git-bug output: {0}")]
     Parse(#[from] serde_json::Error),
     #[error("git-bug returned no comments for {0}")]
@@ -106,6 +113,14 @@ pub struct IssueDetail {
     pub comments: Vec<Comment>,
 }
 
+/// git-bug prints `"labels": null` for an issue that never had one.
+fn null_as_empty<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<Vec<String>>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
+
 #[derive(Deserialize)]
 struct RawTime {
     time: String,
@@ -123,7 +138,7 @@ struct RawHead {
     create_time: RawTime,
     edit_time: RawTime,
     status: Status,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     labels: Vec<String>,
     title: String,
     author: RawAuthor,
@@ -308,6 +323,14 @@ mod tests {
         assert_eq!(bug.kind, Some(Kind::Bug));
         assert_eq!(bug.state, Some(State::Blocked));
         assert_eq!(bug.status, Status::Closed);
+    }
+
+    #[test]
+    fn null_labels_parse_as_empty() {
+        let mut rows: serde_json::Value = serde_json::from_str(LIST).unwrap();
+        rows[0]["labels"] = serde_json::Value::Null;
+        let issues = parse_list(&rows.to_string()).unwrap();
+        assert!(issues.iter().any(|i| i.labels.is_empty()));
     }
 
     #[test]

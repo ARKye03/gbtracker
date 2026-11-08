@@ -1,13 +1,18 @@
-use iced::widget::{button, column, container, markdown, row, scrollable, space, text};
+use iced::widget::{
+    button, column, container, markdown, row, scrollable, space, text, text_editor,
+};
 use iced::{Alignment, Element, Fill, Padding};
 use lucide_iced::icon as lu;
 
-use super::components::{MEDIUM, chip, detail_row, icon, secondary_button, skeleton};
+use super::components::{
+    MEDIUM, chip, choice_button, detail_row, icon, primary_button_maybe, secondary_button,
+    skeleton, spinner_dot,
+};
 use super::screen::{kind_label, layer_label, state_badge};
 use crate::app::{App, DetailPane, DetailState, Message};
 use crate::theme::{Tone, style};
 use gbtracker::epics;
-use gbtracker::gitbug::{Issue, Kind};
+use gbtracker::gitbug::{Issue, Kind, State, StateTarget, Status, WriteOp};
 
 const WIDTH: f32 = 480.0;
 
@@ -37,7 +42,8 @@ pub fn view(app: &App) -> Option<Element<'_, Message>> {
         state_badge(issue),
         summary(app, pane, issue),
         labels(issue),
-        actions(issue),
+        actions(app, pane, issue),
+        write_status(app, pane, issue),
     ]
     .spacing(20)
     .padding(Padding {
@@ -104,8 +110,16 @@ fn labels(issue: &Issue) -> Element<'_, Message> {
         .into()
 }
 
-fn actions(issue: &Issue) -> Element<'_, Message> {
-    row![
+fn actions<'a>(app: &'a App, pane: &'a DetailPane, issue: &'a Issue) -> Element<'a, Message> {
+    let idle = !app.is_pending(&pane.root, &issue.id);
+    let write = |op: WriteOp| {
+        idle.then(|| Message::Write {
+            root: pane.root.clone(),
+            id: issue.id.clone(),
+            op,
+        })
+    };
+    let copy = row![
         secondary_button("Copy id", Message::Copy(issue.id.clone())),
         secondary_button(
             "Copy /roadmap:impl",
@@ -114,8 +128,81 @@ fn actions(issue: &Issue) -> Element<'_, Message> {
     ]
     .spacing(8)
     .wrap()
-    .vertical_spacing(8)
-    .into()
+    .vertical_spacing(8);
+
+    let changes = if issue.status == Status::Closed {
+        row![choice_button("Reopen", false, write(WriteOp::Reopen))]
+    } else {
+        let state = |target, current: bool, label| {
+            choice_button(label, current, write(WriteOp::State(target)))
+        };
+        row![
+            state(
+                StateTarget::InProgress,
+                issue.state == Some(State::InProgress),
+                "In progress"
+            ),
+            state(
+                StateTarget::Blocked,
+                issue.state == Some(State::Blocked),
+                "Blocked"
+            ),
+            state(StateTarget::Clear, false, "Clear state"),
+            choice_button("Close", false, write(WriteOp::Close)),
+        ]
+    }
+    .spacing(8)
+    .wrap()
+    .vertical_spacing(8);
+
+    column![copy, changes].spacing(8).into()
+}
+
+fn write_status<'a>(app: &'a App, pane: &DetailPane, issue: &Issue) -> Element<'a, Message> {
+    let key = (pane.root.clone(), issue.id.clone());
+    if app.pending.contains(&key) {
+        return row![
+            spinner_dot(app.spin),
+            text("Saving…").size(13).style(style::subtle)
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .into();
+    }
+    match app.write_errors.get(&key) {
+        Some(msg) => text(msg.as_str())
+            .size(13)
+            .style(style::tone_text(Tone::Danger, false))
+            .into(),
+        None => space().into(),
+    }
+}
+
+fn comment_box<'a>(app: &'a App, pane: &'a DetailPane) -> Option<Element<'a, Message>> {
+    let key = (pane.root.clone(), pane.summary.id.clone());
+    let draft = app.drafts.get(&key)?;
+    let idle = !app.pending.contains(&key);
+    let empty = draft.text().trim().is_empty();
+    let (root, id) = key;
+    let mut editor = text_editor(draft)
+        .placeholder("Write a comment (markdown)…")
+        .height(110)
+        .padding(10);
+    if idle {
+        let (root, id) = (root.clone(), id.clone());
+        editor = editor.on_action(move |action| Message::EditComment {
+            root: root.clone(),
+            id: id.clone(),
+            action,
+        });
+    }
+    let submit = (idle && !empty).then_some(Message::SubmitComment { root, id });
+    Some(section(
+        "Add a comment",
+        column![editor, primary_button_maybe("Comment", submit)]
+            .spacing(10)
+            .into(),
+    ))
 }
 
 fn link<'a>(pane: &DetailPane, issue: &'a Issue, lead: String) -> Element<'a, Message> {
@@ -226,6 +313,9 @@ fn body<'a>(app: &'a App, pane: &'a DetailPane) -> Element<'a, Message> {
                     },
                 );
                 out = out.push(section("Comments", column(comments).spacing(12).into()));
+            }
+            if let Some(editor) = comment_box(app, pane) {
+                out = out.push(editor);
             }
             out.into()
         }

@@ -30,6 +30,17 @@ fn filled(bg: Color, fg: Color, r: f32) -> button::Style {
     }
 }
 
+fn dimmed(style: button::Style, status: button::Status) -> button::Style {
+    if status != button::Status::Disabled {
+        return style;
+    }
+    button::Style {
+        background: style.background.map(|b| b.scale_alpha(0.5)),
+        text_color: style.text_color.scale_alpha(0.5),
+        ..style
+    }
+}
+
 // --- containers ---
 
 pub fn app(theme: &Theme) -> container::Style {
@@ -155,7 +166,7 @@ pub fn primary(theme: &Theme, status: button::Status) -> button::Style {
         button::Status::Hovered | button::Status::Pressed => t.accent_hover,
         _ => t.accent,
     };
-    filled(bg, t.on_accent, radius::MD)
+    dimmed(filled(bg, t.on_accent, radius::MD), status)
 }
 
 pub fn secondary(theme: &Theme, status: button::Status) -> button::Style {
@@ -164,7 +175,7 @@ pub fn secondary(theme: &Theme, status: button::Status) -> button::Style {
         button::Status::Hovered | button::Status::Pressed => t.fill_hover,
         _ => t.fill,
     };
-    filled(bg, t.text, radius::MD)
+    dimmed(filled(bg, t.text, radius::MD), status)
 }
 
 /// Top-bar pill (Search, New Bug, inactive tabs, icon buttons).

@@ -1,6 +1,6 @@
 //! Application state and update loop. `update` and `view` never block: every git, git-bug and fs call runs in a `Task`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -10,9 +10,11 @@ use gbtracker::cache::{self, Cache, Snapshot};
 use gbtracker::detail::{DetailCache, LoadedDetail};
 use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{self, Filter, StateFilter, StatusFilter};
-use gbtracker::gitbug::{self, GitBugError, Issue, IssueDetail, Kind, Status};
+use gbtracker::gitbug::{self, GitBugError, Issue, IssueDetail, Kind, Status, WriteOp};
 use gbtracker::workspace::{self, RepoInfo, Root, RootKind, Workspace};
+use gbtracker::writes::WriteQueue;
 use iced::keyboard::{self, key::Named};
+use iced::widget::text_editor;
 use iced::{Element, Subscription, Task, Theme, clipboard, event, time, window};
 use tokio::sync::Semaphore;
 
@@ -67,6 +69,11 @@ impl RepoEntry {
             issues: Vec::new(),
             keys: Vec::new(),
         }
+    }
+
+    fn replace_issue(&mut self, pos: usize, issue: Issue) {
+        self.keys[pos] = filter::search_key(&issue);
+        self.issues[pos] = issue;
     }
 
     fn set_issues(&mut self, issues: Vec<Issue>) {
@@ -159,6 +166,13 @@ pub struct App {
     pub expanded: HashSet<(PathBuf, String)>,
     pub detail: Option<DetailPane>,
     detail_cache: DetailCache,
+    /// Issues with a write in flight, by repo root and id; their actions stay disabled.
+    pub pending: HashSet<(PathBuf, String)>,
+    /// Last failed write per issue; cleared when the next one starts.
+    pub write_errors: HashMap<(PathBuf, String), String>,
+    /// Unsent comment text per issue, kept across pane switches.
+    pub drafts: HashMap<(PathBuf, String), text_editor::Content>,
+    writes: WriteQueue,
     pub initials: String,
     identity_asked: bool,
     /// Filtered (and, for the roadmap view, ordered) result, recomputed in `update`.
@@ -197,6 +211,26 @@ pub enum Message {
         id: String,
         edited: String,
         result: Result<Box<IssueDetail>, String>,
+    },
+    Write {
+        root: PathBuf,
+        id: String,
+        op: WriteOp,
+    },
+    WriteDone {
+        root: PathBuf,
+        id: String,
+        op: WriteOp,
+        result: Result<Box<IssueDetail>, String>,
+    },
+    EditComment {
+        root: PathBuf,
+        id: String,
+        action: text_editor::Action,
+    },
+    SubmitComment {
+        root: PathBuf,
+        id: String,
     },
     Copy(String),
     Identified(Option<String>),
@@ -292,6 +326,10 @@ impl App {
             expanded: HashSet::new(),
             detail: None,
             detail_cache: DetailCache::default(),
+            pending: HashSet::new(),
+            write_errors: HashMap::new(),
+            drafts: HashMap::new(),
+            writes: WriteQueue::default(),
             initials: "?".to_owned(),
             identity_asked: false,
             rows: Vec::new(),
@@ -510,6 +548,32 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Write { root, id, op } => self.start_write(root, id, op),
+            Message::WriteDone {
+                root,
+                id,
+                op,
+                result,
+            } => self.on_written(root, id, op, result),
+            Message::EditComment { root, id, action } => {
+                if let Some(draft) = self.drafts.get_mut(&(root, id)) {
+                    draft.perform(action);
+                }
+                Task::none()
+            }
+            Message::SubmitComment { root, id } => {
+                let body = self
+                    .drafts
+                    .get(&(root.clone(), id.clone()))
+                    .map(|d| d.text().trim_end().to_owned())
+                    .unwrap_or_default();
+                if body.trim().is_empty() {
+                    self.write_errors
+                        .insert((root, id), GitBugError::EmptyComment.to_string());
+                    return Task::none();
+                }
+                self.start_write(root, id, WriteOp::Comment(body))
+            }
             Message::Copy(text) => clipboard::write(text),
             Message::Identified(name) => {
                 match name.as_deref().map(gitbug::initials) {
@@ -585,6 +649,9 @@ impl App {
 
     /// Shows the pane at once from the in-memory summary; fetches only when nothing current is cached or in flight.
     fn open_detail(&mut self, root: PathBuf, issue: Issue) -> Task<Message> {
+        self.drafts
+            .entry((root.clone(), issue.id.clone()))
+            .or_default();
         let same = self.detail.as_ref().is_some_and(|p| {
             p.is(&root, &issue.id, &issue.edited) && !matches!(p.state, DetailState::Failed(_))
         });
@@ -622,6 +689,96 @@ impl App {
             .cloned();
         match live {
             Some(issue) => self.open_detail(root.to_owned(), issue),
+            None => Task::none(),
+        }
+    }
+
+    pub fn is_pending(&self, root: &Path, id: &str) -> bool {
+        self.pending.iter().any(|(r, i)| r == root && i == id)
+    }
+
+    /// Queues behind earlier writes to the same repo; other repos and the rest of the UI keep running.
+    fn start_write(&mut self, root: PathBuf, id: String, op: WriteOp) -> Task<Message> {
+        let key = (root.clone(), id.clone());
+        if self.pending.contains(&key) {
+            return Task::none();
+        }
+        self.write_errors.remove(&key);
+        self.pending.insert(key);
+        let ticket = self.writes.enter(&root);
+        Task::perform(
+            async move {
+                ticket.turn().await;
+                let result = gitbug::apply(&root, &id, op.clone())
+                    .await
+                    .map(Box::new)
+                    .map_err(|e| e.to_string());
+                (root, id, op, result)
+            },
+            |(root, id, op, result)| Message::WriteDone {
+                root,
+                id,
+                op,
+                result,
+            },
+        )
+    }
+
+    /// A failed write changes nothing locally; a successful one replaces the issue everywhere it is held.
+    fn on_written(
+        &mut self,
+        root: PathBuf,
+        id: String,
+        op: WriteOp,
+        result: Result<Box<IssueDetail>, String>,
+    ) -> Task<Message> {
+        let key = (root.clone(), id.clone());
+        self.pending.remove(&key);
+        let detail = match result {
+            Ok(detail) => *detail,
+            Err(msg) => {
+                self.write_errors.insert(key, msg);
+                return Task::none();
+            }
+        };
+        if matches!(op, WriteOp::Comment(_)) {
+            self.drafts.insert(key, text_editor::Content::new());
+        }
+        let issue = detail.issue.clone();
+        let loaded = Rc::new(LoadedDetail::new(detail));
+        self.detail_cache.insert(
+            root.clone(),
+            id.clone(),
+            issue.edited.clone(),
+            loaded.clone(),
+        );
+        if let Some(pane) = self
+            .detail
+            .as_mut()
+            .filter(|p| p.root == root && p.summary.id == id)
+        {
+            pane.summary = issue.clone();
+            pane.state = DetailState::Ready(loaded);
+        }
+        self.store_issue(&root, issue)
+    }
+
+    /// Patches one issue in place and rewrites the snapshot; the old fingerprint stays, so the next check still reloads.
+    fn store_issue(&mut self, root: &Path, issue: Issue) -> Task<Message> {
+        let Some(entry) = self.repos.iter_mut().find(|e| e.info.root == root) else {
+            return Task::none();
+        };
+        let Some(pos) = entry.issues.iter().position(|i| i.id == issue.id) else {
+            return Task::none();
+        };
+        entry.replace_issue(pos, issue);
+        let persist = entry
+            .fingerprint
+            .clone()
+            .map(|fp| (entry.info.clone(), fp, entry.issues.clone()));
+        self.refilter();
+        match persist {
+            Some((info, fp, issues)) => self.persist_issues(info, fp, issues),
             None => Task::none(),
         }
     }
@@ -921,7 +1078,7 @@ impl App {
                 _ => None,
             }),
         ];
-        if self.is_busy() {
+        if self.is_busy() || !self.pending.is_empty() {
             subs.push(time::every(SPIN_EVERY).map(|_| Message::Spin));
         }
         Subscription::batch(subs)
@@ -1491,6 +1648,111 @@ mod tests {
             repos: vec![],
         });
         assert!(app.detail.is_none());
+    }
+
+    fn key() -> (PathBuf, String) {
+        (info("a").root, "a".repeat(64))
+    }
+
+    fn write(op: WriteOp) -> Message {
+        Message::Write {
+            root: info("a").root,
+            id: "a".repeat(64),
+            op,
+        }
+    }
+
+    fn written(app: &App, op: WriteOp, edit: impl FnOnce(&mut Issue)) -> Message {
+        let mut issue = app.repos[0].issues[0].clone();
+        edit(&mut issue);
+        Message::WriteDone {
+            root: info("a").root,
+            id: issue.id.clone(),
+            op,
+            result: Ok(Box::new(IssueDetail {
+                issue,
+                body: "body".into(),
+                comments: vec![],
+            })),
+        }
+    }
+
+    #[test]
+    fn a_write_marks_the_issue_pending_and_rejects_a_second_one() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        assert_eq!(app.update(write(WriteOp::Close)).units(), 1);
+        assert!(app.pending.contains(&key()));
+        assert!(app.is_pending(&info("a").root, &"a".repeat(64)));
+        assert_eq!(app.update(write(WriteOp::Close)).units(), 0);
+    }
+
+    #[test]
+    fn a_failed_write_keeps_the_issue_and_shows_the_error() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        let before = app.repos[0].issues.clone();
+        let _ = select(&mut app);
+        let _ = app.update(write(WriteOp::Close));
+        app.send(Message::WriteDone {
+            root: info("a").root,
+            id: "a".repeat(64),
+            op: WriteOp::Close,
+            result: Err(GitBugError::Locked { pid: Some(7) }.to_string()),
+        });
+        assert!(app.pending.is_empty());
+        assert_eq!(app.repos[0].issues, before);
+        assert_eq!(row_titles(&app), ["one"]);
+        assert!(app.write_errors[&key()].contains("locked"));
+        assert_eq!(app.detail.as_ref().unwrap().summary, before[0]);
+
+        let _ = app.update(write(WriteOp::Close));
+        assert!(app.write_errors.is_empty(), "next write clears the error");
+    }
+
+    #[test]
+    fn a_successful_write_updates_rows_pane_and_cache() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        let _ = select(&mut app);
+        let _ = app.update(write(WriteOp::Close));
+        let msg = written(&app, WriteOp::Close, |i| {
+            i.status = Status::Closed;
+            i.edited = "2026-11-09T00:00:00Z".into();
+        });
+        app.send(msg);
+
+        assert!(app.pending.is_empty());
+        assert_eq!(app.repos[0].issues[0].status, Status::Closed);
+        assert!(app.rows.is_empty(), "closed issue leaves the open filter");
+        let pane = app.detail.as_ref().unwrap();
+        assert_eq!(pane.summary.status, Status::Closed);
+        assert!(matches!(pane.state, DetailState::Ready(_)));
+        assert!(
+            app.detail_cache
+                .get(&info("a").root, &"a".repeat(64), "2026-11-09T00:00:00Z")
+                .is_some()
+        );
+        assert_eq!(select(&mut app).units(), 0, "pane is current, no refetch");
+    }
+
+    #[test]
+    fn empty_comments_are_never_sent_and_sent_ones_clear_the_draft() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        let _ = select(&mut app);
+        let submit = || Message::SubmitComment {
+            root: info("a").root,
+            id: "a".repeat(64),
+        };
+        assert_eq!(app.update(submit()).units(), 0);
+        assert!(app.write_errors[&key()].contains("empty"));
+        assert!(app.pending.is_empty());
+
+        app.drafts
+            .insert(key(), text_editor::Content::with_text("## Hi"));
+        assert_eq!(app.update(submit()).units(), 1);
+        assert!(app.pending.contains(&key()));
+
+        let msg = written(&app, WriteOp::Comment("## Hi".into()), |_| {});
+        app.send(msg);
+        assert!(app.drafts[&key()].text().trim().is_empty());
     }
 
     #[test]
