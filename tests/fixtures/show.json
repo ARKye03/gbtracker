@@ -1,0 +1,26 @@
+{
+  "id": "490a542e9d88c105721059bf66dec98975ed092c3c07aa3f2095b356af5cc8a7",
+  "human_id": "490a542",
+  "create_time": { "timestamp": 1794172764, "time": "2026-11-08T18:19:24-03:00" },
+  "edit_time": { "timestamp": 1794173047, "time": "2026-11-08T18:24:07-03:00" },
+  "status": "open",
+  "labels": ["epic:e90c7101094a1f6bb8790972d8bae299464fa54911325de56956e5fd66485ddf", "kind:task", "state:in-progress"],
+  "title": "L1 — git-bug read adapter and issue model",
+  "author": { "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" },
+  "actors": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+  "participants": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+  "comments": [
+    {
+      "id": "449900a54a2e9d588c14057221059ebf669dec9d89758ed0982c3cc07aa13f20",
+      "human_id": "449900a",
+      "author": { "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" },
+      "message": "## Context\nNo backend exists; the UI renders `src/mock.rs`.\n\n## Acceptance Criteria\n- Unit tests parse the fixtures"
+    },
+    {
+      "id": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+      "human_id": "5e5e5e5",
+      "author": { "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" },
+      "message": "Picked up by the runner."
+    }
+  ]
+}

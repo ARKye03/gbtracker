@@ -1,0 +1,72 @@
+[
+  {
+    "id": "e90c7101094a1f6bb8790972d8bae299464fa54911325de56956e5fd66485ddf",
+    "human_id": "e90c710",
+    "create_time": { "timestamp": 1794172743, "time": "2026-11-08T18:19:03-03:00", "lamport": 2 },
+    "edit_time": { "timestamp": 1794172945, "time": "2026-11-08T18:22:25-03:00", "lamport": 28 },
+    "status": "open",
+    "labels": ["kind:epic"],
+    "title": "gbtracker: multi-repo git-bug manager",
+    "actors": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+    "participants": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+    "author": { "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" },
+    "comments": 1,
+    "metadata": {}
+  },
+  {
+    "id": "b0b0b0b000000000000000000000000000000000000000000000000000000000",
+    "human_id": "b0b0b0b",
+    "create_time": { "timestamp": 1794172800, "time": "2026-11-08T18:20:00-03:00", "lamport": 4 },
+    "edit_time": { "timestamp": 1794172900, "time": "2026-11-08T18:21:40-03:00", "lamport": 9 },
+    "status": "closed",
+    "labels": ["kind:bug", "state:blocked"],
+    "title": "Loose bug without layer",
+    "actors": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+    "participants": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+    "author": { "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" },
+    "comments": 1,
+    "metadata": {}
+  },
+  {
+    "id": "2222222000000000000000000000000000000000000000000000000000000000",
+    "human_id": "2222222",
+    "create_time": { "timestamp": 1794172810, "time": "2026-11-08T18:20:10-03:00", "lamport": 5 },
+    "edit_time": { "timestamp": 1794173000, "time": "2026-11-08T18:23:20-03:00", "lamport": 20 },
+    "status": "open",
+    "labels": ["epic:e90c7101094a1f6bb8790972d8bae299464fa54911325de56956e5fd66485ddf", "kind:task", "state:in-progress"],
+    "title": "L10 — Late layer",
+    "actors": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+    "participants": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+    "author": { "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" },
+    "comments": 1,
+    "metadata": {}
+  },
+  {
+    "id": "490a542e9d88c105721059bf66dec98975ed092c3c07aa3f2095b356af5cc8a7",
+    "human_id": "490a542",
+    "create_time": { "timestamp": 1794172764, "time": "2026-11-08T18:19:24-03:00", "lamport": 3 },
+    "edit_time": { "timestamp": 1794173047, "time": "2026-11-08T18:24:07-03:00", "lamport": 30 },
+    "status": "open",
+    "labels": ["epic:e90c7101094a1f6bb8790972d8bae299464fa54911325de56956e5fd66485ddf", "kind:task", "state:in-progress"],
+    "title": "L1 — git-bug read adapter and issue model",
+    "actors": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+    "participants": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+    "author": { "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" },
+    "comments": 2,
+    "metadata": {}
+  },
+  {
+    "id": "1111111000000000000000000000000000000000000000000000000000000000",
+    "human_id": "1111111",
+    "create_time": { "timestamp": 1794172770, "time": "2026-11-08T18:19:30-03:00", "lamport": 4 },
+    "edit_time": { "timestamp": 1794173010, "time": "2026-11-08T18:23:30-03:00", "lamport": 21 },
+    "status": "open",
+    "labels": ["epic:e90c7101094a1f6bb8790972d8bae299464fa54911325de56956e5fd66485ddf", "kind:task", "state:in-progress"],
+    "title": "L2 — Workspace config and git-bug repo discovery",
+    "actors": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+    "participants": [{ "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" }],
+    "author": { "id": "836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66", "human_id": "836d943", "name": "ARKye03", "login": "" },
+    "comments": 1,
+    "metadata": {}
+  }
+]
