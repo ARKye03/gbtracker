@@ -442,7 +442,7 @@ fn overview_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
 
     let heading = row![
         column![
-            text!("{} open", counts.open()).size(29),
+            text!("{} open", entry.open_count()).size(29),
             text(entry.info.name.as_str()).size(18),
         ]
         .spacing(8),
