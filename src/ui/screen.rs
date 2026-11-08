@@ -343,10 +343,14 @@ fn epic_card<'a>(app: &'a App, summary: &EpicSummary) -> Element<'a, Message> {
     ]
     .spacing(18);
 
-    let labels = row(epic.labels.iter().map(|l| chip(l.as_str())))
-        .spacing(8)
-        .wrap()
-        .vertical_spacing(8);
+    let labels = row(epic
+        .labels
+        .iter()
+        .filter(|l| super::is_user_label(l))
+        .map(|l| chip(l.as_str())))
+    .spacing(8)
+    .wrap()
+    .vertical_spacing(8);
 
     let mut card = column![
         heading,
@@ -960,11 +964,7 @@ fn issue_card(
     let labels = row(issue
         .labels
         .iter()
-        .filter(|l| {
-            !["kind:", "epic:", "state:"]
-                .iter()
-                .any(|p| l.starts_with(p))
-        })
+        .filter(|l| super::is_user_label(l))
         .map(|l| chip(l.clone())))
     .spacing(6);
 

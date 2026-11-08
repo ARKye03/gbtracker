@@ -103,11 +103,15 @@ fn summary<'a>(app: &'a App, pane: &'a DetailPane, issue: &'a Issue) -> Element<
 }
 
 fn labels(issue: &Issue) -> Element<'_, Message> {
-    row(issue.labels.iter().map(|l| chip(l.as_str())))
-        .spacing(8)
-        .wrap()
-        .vertical_spacing(8)
-        .into()
+    row(issue
+        .labels
+        .iter()
+        .filter(|l| super::is_user_label(l))
+        .map(|l| chip(l.as_str())))
+    .spacing(8)
+    .wrap()
+    .vertical_spacing(8)
+    .into()
 }
 
 fn actions<'a>(app: &'a App, pane: &'a DetailPane, issue: &'a Issue) -> Element<'a, Message> {
