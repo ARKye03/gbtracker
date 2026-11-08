@@ -189,6 +189,11 @@ impl DoneSheet {
         }
     }
 
+    /// A run in progress stays open, so its epics are still closed once the children settle.
+    pub fn can_dismiss(&self) -> bool {
+        self.phase != DonePhase::Closing
+    }
+
     pub fn is_waiting(&self, id: &str) -> bool {
         self.waiting.contains(id)
     }
@@ -591,8 +596,10 @@ impl App {
                 }
             }
             Message::CloseDetail => {
-                if self.done.take().is_none() {
-                    self.detail = None;
+                match &self.done {
+                    Some(sheet) if sheet.can_dismiss() => self.done = None,
+                    Some(_) => {}
+                    None => self.detail = None,
                 }
                 Task::none()
             }
@@ -678,7 +685,9 @@ impl App {
             }
             Message::RunDone => self.run_done(),
             Message::DismissDone => {
-                self.done = None;
+                if self.done.as_ref().is_some_and(DoneSheet::can_dismiss) {
+                    self.done = None;
+                }
                 Task::none()
             }
             Message::Identified(name) => {
@@ -2225,7 +2234,7 @@ mod tests {
     }
 
     #[test]
-    fn escape_closes_the_sheet_before_the_pane_and_a_dismissed_run_is_harmless() {
+    fn escape_closes_the_sheet_before_the_pane_but_never_mid_run() {
         let mut app = sheet_open();
         let _ = select(&mut app);
         app.send(Message::CloseDetail);
@@ -2235,7 +2244,16 @@ mod tests {
         let mut app = sheet_open();
         let _ = app.update(Message::RunDone);
         app.send(Message::DismissDone);
-        assert_eq!(app.update(closed('b', Ok(()))).units(), 0);
+        app.send(Message::CloseDetail);
+        assert_eq!(
+            sheet(&app).phase,
+            DonePhase::Closing,
+            "a run cannot be dismissed"
+        );
+        app.send(closed('b', Ok(())));
+        assert_eq!(app.update(closed('c', Ok(()))).units(), 1);
+        app.send(closed('e', Ok(())));
+        app.send(Message::DismissDone);
         assert!(app.done.is_none());
     }
 

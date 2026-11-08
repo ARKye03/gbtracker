@@ -46,7 +46,7 @@ fn card<'a>(app: &'a App, sheet: &'a DoneSheet) -> Element<'a, Message> {
             .height(32)
             .padding(0)
             .style(style::icon_square)
-            .on_press(Message::DismissDone),
+            .on_press_maybe(sheet.can_dismiss().then_some(Message::DismissDone)),
     ]
     .align_y(Alignment::Center);
 
@@ -236,18 +236,19 @@ fn epic_row<'a>(
     if !allowed && sheet.phase == DonePhase::Choose {
         why.push("waiting on unticked children".to_owned());
     }
-    let head = row![
-        tick(
-            sheet,
-            &epic.id,
-            sheet.picked.contains(&epic.id) && allowed,
-            label
-        )
-        .width(Fill),
-        chip("epic"),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
+    let mut check = tick(
+        sheet,
+        &epic.id,
+        sheet.picked.contains(&epic.id) && allowed,
+        label,
+    )
+    .width(Fill);
+    if !allowed {
+        check = check.on_toggle_maybe(None::<fn(bool) -> Message>);
+    }
+    let head = row![check, chip("epic"),]
+        .spacing(10)
+        .align_y(Alignment::Center);
     row_card(head.into(), why, outcome(app, sheet, &epic.id))
 }
 

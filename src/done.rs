@@ -287,6 +287,7 @@ pub async fn find(
     args.extend([
         "--grep=^Refs: ",
         "--format=%h%x1f%s%x1f%(trailers:key=Refs,valueonly,separator=%x20)",
+        "--",
     ]);
     let log = git(root, &args).await?;
     let bugs = candidates(issues, &parse_log(&log));
