@@ -423,6 +423,12 @@ fn repo_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
             .size(14)
             .style(style::tone_text(Tone::Danger, false))
             .into(),
+        LoadState::Locked if entry.fingerprint.is_none() => {
+            text("Locked by another git-bug process; retrying.")
+                .size(13)
+                .style(style::tone_text(Tone::Warning, false))
+                .into()
+        }
         LoadState::Loading if entry.fingerprint.is_none() => {
             column![skeleton(220.0, 14.0), skeleton(140.0, 14.0)]
                 .spacing(10)
