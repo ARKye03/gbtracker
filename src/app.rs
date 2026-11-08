@@ -268,9 +268,9 @@ impl App {
             .collect();
 
         self.rows = if self.roadmap {
-            let refs: Vec<&Issue> = hits
+            let refs: Vec<(usize, &Issue)> = hits
                 .iter()
-                .map(|&(r, i)| &self.repos[r].issues[i])
+                .map(|&(r, i)| (r, &self.repos[r].issues[i]))
                 .collect();
             filter::roadmap_order(&refs)
                 .into_iter()
@@ -460,6 +460,8 @@ impl App {
                 entry.info = info;
                 if !entry.info.has_git_bug {
                     entry.state = LoadState::NoGitBug;
+                    entry.set_issues(Vec::new());
+                    entry.fingerprint = None;
                 } else if gained {
                     entry.state = LoadState::Loading;
                 }

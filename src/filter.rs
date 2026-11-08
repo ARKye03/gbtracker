@@ -95,20 +95,27 @@ fn urgent(issue: &Issue) -> bool {
 }
 
 /// `/roadmap-open` order: in-progress/blocked groups first, children nested under their epic by layer.
+/// Each entry pairs a repo index with its issue, since clones of one project share git-bug ids.
 /// Indices refer to `issues`; an issue whose epic is not in the slice stays top level.
-pub fn roadmap_order(issues: &[&Issue]) -> Vec<Placed> {
-    let epic_at: HashMap<&str, usize> = issues
+pub fn roadmap_order(entries: &[(usize, &Issue)]) -> Vec<Placed> {
+    let issues: Vec<&Issue> = entries.iter().map(|&(_, i)| i).collect();
+    let epic_at: HashMap<(usize, &str), usize> = entries
         .iter()
         .enumerate()
-        .filter(|(_, i)| i.kind == Some(Kind::Epic))
-        .map(|(pos, i)| (i.id.as_str(), pos))
+        .filter(|(_, (_, i))| i.kind == Some(Kind::Epic))
+        .map(|(pos, &(repo, i))| ((repo, i.id.as_str()), pos))
         .collect();
 
     let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut tops = Vec::new();
-    for (pos, issue) in issues.iter().enumerate() {
+    for (pos, &(repo, issue)) in entries.iter().enumerate() {
         let parent = (issue.kind != Some(Kind::Epic))
-            .then(|| issue.epic.as_deref().and_then(|id| epic_at.get(id)))
+            .then(|| {
+                issue
+                    .epic
+                    .as_deref()
+                    .and_then(|id| epic_at.get(&(repo, id)))
+            })
             .flatten();
         match parent {
             Some(&epic) => children.entry(epic).or_default().push(pos),
@@ -304,8 +311,9 @@ mod tests {
         let all = [
             &calm, &calm_l2, &calm_l1, &busy, &busy_l2, &busy_l1, &plain, &loose,
         ];
+        let entries: Vec<(usize, &Issue)> = all.iter().map(|&i| (0, i)).collect();
 
-        let order: Vec<(char, usize)> = roadmap_order(&all)
+        let order: Vec<(char, usize)> = roadmap_order(&entries)
             .into_iter()
             .map(|p| (all[p.index].title.chars().next().unwrap(), p.depth))
             .collect();
@@ -330,9 +338,17 @@ mod tests {
         let orphan = child("b", &missing, 1, None);
         let mut sub = typed("c", Kind::Epic, None);
         sub.epic = Some(orphan.id.clone());
-        let all = [&orphan, &sub];
-        let order = roadmap_order(&all);
+        let order = roadmap_order(&[(0, &orphan), (0, &sub)]);
         assert_eq!(order.len(), 2);
         assert!(order.iter().all(|p| p.depth == 0));
+    }
+
+    #[test]
+    fn roadmap_does_not_merge_epics_shared_by_clones() {
+        let epic = typed("a", Kind::Epic, None);
+        let kid = child("b", &epic, 1, None);
+        let order = roadmap_order(&[(0, &epic), (0, &kid), (1, &epic), (1, &kid)]);
+        let shape: Vec<(usize, usize)> = order.iter().map(|p| (p.index, p.depth)).collect();
+        assert_eq!(shape, [(0, 0), (1, 1), (2, 0), (3, 1)]);
     }
 }
