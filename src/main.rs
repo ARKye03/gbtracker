@@ -1,18 +1,19 @@
+mod app;
 mod mock;
 mod theme;
 mod ui;
 
 use iced::widget::Svg;
-use iced::{Element, Theme};
 use lucide_iced::icon as lu;
 
-use theme::Mode;
+use app::App;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Section {
+    #[default]
+    Repositories,
     Overview,
     Bugs,
-    #[default]
     Epics,
     Labels,
     Identities,
@@ -21,7 +22,8 @@ pub enum Section {
 }
 
 impl Section {
-    pub const ALL: [Section; 7] = [
+    pub const ALL: [Section; 8] = [
+        Section::Repositories,
         Section::Overview,
         Section::Bugs,
         Section::Epics,
@@ -33,6 +35,7 @@ impl Section {
 
     pub fn meta(self) -> (Svg<'static>, &'static str) {
         match self {
+            Section::Repositories => (lu::folder_git_2(), "Repositories"),
             Section::Overview => (lu::house(), "Overview"),
             Section::Bugs => (lu::bug(), "Bugs"),
             Section::Epics => (lu::milestone(), "Epics"),
@@ -44,54 +47,11 @@ impl Section {
     }
 }
 
-#[derive(Default)]
-pub struct App {
-    mode: Mode,
-    section: Section,
-}
-
-impl App {
-    fn boot() -> Self {
-        let mode = match std::env::var("GBTRACKER_THEME").as_deref() {
-            Ok("dark") => Mode::Dark,
-            _ => Mode::Light,
-        };
-        Self {
-            mode,
-            ..Self::default()
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Message {
-    ToggleTheme,
-    Navigate(Section),
-    Noop,
-}
-
-impl App {
-    fn update(&mut self, message: Message) {
-        match message {
-            Message::ToggleTheme => self.mode = self.mode.toggle(),
-            Message::Navigate(s) => self.section = s,
-            Message::Noop => {}
-        }
-    }
-
-    fn view(&self) -> Element<'_, Message> {
-        ui::screen::view(self)
-    }
-
-    fn theme(&self) -> Theme {
-        self.mode.theme()
-    }
-}
-
 fn main() -> iced::Result {
     iced::application(App::boot, App::update, App::view)
         .title("gbtracker")
         .theme(App::theme)
+        .subscription(App::subscription)
         .window_size((1280.0, 860.0))
         .run()
 }

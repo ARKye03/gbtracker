@@ -99,6 +99,54 @@ pub fn status_dot(tone: Tone) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
+pub fn neutral_dot(theme: &Theme) -> container::Style {
+    let t = Tokens::of(theme);
+    container::Style {
+        background: Some(t.text_subtle.into()),
+        border: border::rounded(radius::PILL),
+        ..container::Style::default()
+    }
+}
+
+pub fn accent_dot(active: bool) -> impl Fn(&Theme) -> container::Style {
+    move |theme| {
+        let t = Tokens::of(theme);
+        let c = if active { t.accent } else { t.text_subtle };
+        container::Style {
+            background: Some(c.into()),
+            border: border::rounded(radius::PILL),
+            ..container::Style::default()
+        }
+    }
+}
+
+/// Placeholder block shown while content is loading.
+pub fn skeleton(theme: &Theme) -> container::Style {
+    let t = Tokens::of(theme);
+    container::Style {
+        background: Some(t.fill.into()),
+        border: border::rounded(radius::SM),
+        ..container::Style::default()
+    }
+}
+
+pub fn banner(tone: Tone) -> impl Fn(&Theme) -> container::Style {
+    move |theme| {
+        let t = Tokens::of(theme);
+        let (c, _, track) = t.tone(tone);
+        container::Style {
+            background: Some(track.into()),
+            text_color: Some(c),
+            border: Border {
+                color: c,
+                width: 1.0,
+                radius: radius::MD.into(),
+            },
+            ..container::Style::default()
+        }
+    }
+}
+
 // --- buttons ---
 
 pub fn primary(theme: &Theme, status: button::Status) -> button::Style {

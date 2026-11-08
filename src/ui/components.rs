@@ -84,6 +84,29 @@ pub fn dot<'a, M: 'a>(tone: Tone, size: f32) -> Element<'a, M> {
         .into()
 }
 
+/// Three dots with one lit; advance `phase` on a timer to animate.
+pub fn spinner_dot<'a, M: 'a>(phase: usize) -> Element<'a, M> {
+    row((0..3).map(|i| {
+        container(space())
+            .width(5)
+            .height(5)
+            .style(style::accent_dot(i == phase % 3))
+            .into()
+    }))
+    .spacing(3)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+/// Rounded placeholder block for content that has not loaded yet.
+pub fn skeleton<'a, M: 'a>(width: impl Into<Length>, height: f32) -> Element<'a, M> {
+    container(space())
+        .width(width)
+        .height(height)
+        .style(style::skeleton)
+        .into()
+}
+
 /// Label on the left, value on the right (card detail rows).
 pub fn detail_row<'a, M: 'a>(label: &'a str, value: impl text::IntoFragment<'a>) -> Element<'a, M> {
     row![

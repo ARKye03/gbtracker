@@ -17,8 +17,6 @@ impl Epic {
     }
 }
 
-pub const WORKSPACE: &str = "gbtracker";
-pub const WORKSPACE_PATH: &str = "~/personal-space/gbtracker";
 pub const IDENTITY_INITIALS: &str = "RS";
 
 pub const EPICS: &[Epic] = &[
