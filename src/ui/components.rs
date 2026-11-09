@@ -50,13 +50,22 @@ pub fn icon_pill<'a, M: Clone + 'a>(
     label: impl Into<String>,
     on_press: M,
 ) -> Element<'a, M> {
+    icon_pill_hint(svg, label, None, on_press)
+}
+
+pub fn icon_pill_hint<'a, M: Clone + 'a>(
+    svg: Svg<'a>,
+    label: impl Into<String>,
+    hint: Option<String>,
+    on_press: M,
+) -> Element<'a, M> {
     let pill = button(container(icon(svg, 17.0)).center(Fill))
         .width(40)
         .height(40)
         .padding(0)
         .style(style::pill)
         .on_press(on_press);
-    tip(pill, label).into()
+    tip(pill, label).shortcut_maybe(hint).into()
 }
 
 /// Square icon-only button with a tooltip; `None` renders it disabled.
@@ -67,13 +76,24 @@ pub fn icon_square_button<'a, M: Clone + 'a>(
     label: impl Into<String>,
     on_press: Option<M>,
 ) -> Element<'a, M> {
+    icon_square_button_hint(svg, icon_size, side, label, None, on_press)
+}
+
+pub fn icon_square_button_hint<'a, M: Clone + 'a>(
+    svg: Svg<'a>,
+    icon_size: f32,
+    side: f32,
+    label: impl Into<String>,
+    hint: Option<String>,
+    on_press: Option<M>,
+) -> Element<'a, M> {
     let square = button(container(icon(svg, icon_size)).center(Fill))
         .width(side)
         .height(side)
         .padding(0)
         .style(style::icon_square)
         .on_press_maybe(on_press);
-    tip(square, label).into()
+    tip(square, label).shortcut_maybe(hint).into()
 }
 
 pub fn primary_button<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Element<'a, M> {

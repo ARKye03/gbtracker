@@ -51,6 +51,11 @@ impl<M> Tooltip<'_, M> {
         self
     }
 
+    pub fn shortcut_maybe(mut self, shortcut: Option<String>) -> Self {
+        self.shortcut = shortcut;
+        self
+    }
+
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self

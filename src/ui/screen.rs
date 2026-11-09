@@ -10,13 +10,14 @@ use lucide_iced::icon as lu;
 
 use super::components::{
     MEDIUM, card_grid, chip, choice_button, detail_row, dot, icon, icon_muted, icon_pill,
-    icon_square_button, labeled, primary_button, secondary_button, skeleton, spinner_dot,
-    split_progress, toggle_chip, top_pill, vdivider,
+    icon_pill_hint, icon_square_button, icon_square_button_hint, labeled, primary_button,
+    secondary_button, skeleton, spinner_dot, split_progress, toggle_chip, top_pill, vdivider,
 };
 use super::tooltip::tip;
-use super::{detail, done};
+use super::{detail, done, shortcuts};
 use crate::Section;
-use crate::app::{App, LoadState, Message, RepoEntry, Row, ago};
+use crate::app::{App, LIST_ID, LoadState, Message, RepoEntry, Row, SEARCH_ID, ago};
+use crate::keymap::{self, Action};
 use crate::theme::{Tone, style};
 use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{Filter, StateFilter, StatusFilter};
@@ -67,11 +68,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .height(Fill)
     .style(style::app);
 
-    if app.section == Section::Repositories {
+    let page = if app.section == Section::Repositories {
         done::overlay(app, page.into())
     } else {
         page.into()
-    }
+    };
+    shortcuts::overlay(app, page)
 }
 
 fn top_bar(app: &App) -> Element<'_, Message> {
@@ -82,8 +84,17 @@ fn top_bar(app: &App) -> Element<'_, Message> {
     };
 
     let left = row![
-        icon_pill(lu::panel_left(), "Toggle sidebar", Message::ToggleSidebar),
-        top_pill(labeled(lu::search(), "Search"), false, Message::Noop),
+        icon_pill_hint(
+            lu::panel_left(),
+            "Toggle sidebar",
+            keymap::hint(Action::ToggleSidebar),
+            Message::ToggleSidebar
+        ),
+        tip(
+            top_pill(labeled(lu::search(), "Search"), false, Message::FocusSearch),
+            "Search"
+        )
+        .shortcut_maybe(keymap::hint(Action::FocusSearch)),
         top_pill(labeled(lu::plus(), "New Bug"), false, Message::Noop),
         vdivider(),
         top_pill(
@@ -114,7 +125,18 @@ fn top_bar(app: &App) -> Element<'_, Message> {
 
     let right = row![
         sync,
-        icon_pill(theme_icon, theme_label, Message::ToggleTheme),
+        icon_pill_hint(
+            lu::keyboard(),
+            "Keyboard shortcuts",
+            keymap::hint(Action::Help),
+            Message::ToggleHelp
+        ),
+        icon_pill_hint(
+            theme_icon,
+            theme_label,
+            keymap::hint(Action::CycleTheme),
+            Message::ToggleTheme
+        ),
         icon_pill(lu::message_square(), "Messages", Message::Noop),
         icon_pill(lu::bell(), "Notifications", Message::Noop),
         container(avatar).center(40),
@@ -203,7 +225,9 @@ fn sidebar(app: &App) -> Element<'_, Message> {
                 .width(3)
                 .height(22)
                 .style(style::nav_bar(is_active)),
-            tip(nav, label).enabled(collapsed)
+            tip(nav, label)
+                .shortcut_maybe(keymap::hint(Action::Goto(s)))
+                .enabled(collapsed)
         ]
         .spacing(4)
         .align_y(Alignment::Center)
@@ -805,6 +829,7 @@ fn issues(app: &App) -> Element<'_, Message> {
         header,
         filter_bar(app),
         scrollable(issue_list(app))
+            .id(LIST_ID)
             .height(Fill)
             .style(style::scroll)
     ]
@@ -903,7 +928,9 @@ fn filter_bar(app: &App) -> Element<'_, Message> {
     let repo = repo_picker(app, filter, Message::PickRepo);
 
     let search = text_input("Search title or id", &app.search)
+        .id(SEARCH_ID)
         .on_input(Message::SearchInput)
+        .on_submit(Message::OpenCursor)
         .size(14)
         .padding([8, 12])
         .width(260);
@@ -947,9 +974,9 @@ fn issue_row<'a>(app: &'a App, row: &Row) -> Element<'a, Message> {
     let issue = &entry.issues[row.issue];
     let depth = row.depth;
     let selected = app
-        .detail
+        .cursor
         .as_ref()
-        .is_some_and(|p| p.root == entry.info.root && p.summary.id == issue.id);
+        .is_some_and(|(root, id)| *root == entry.info.root && *id == issue.id);
     let pending = app.is_pending(&entry.info.root, &issue.id);
     let error = app
         .write_errors
@@ -1066,11 +1093,14 @@ fn issue_card(
     };
     let toggle: Element<'static, Message> = match pending {
         Some(phase) => container(spinner_dot(phase)).center(36).into(),
-        None => icon_square_button(
+        None => icon_square_button_hint(
             glyph,
             16.0,
             36.0,
             hint,
+            selected
+                .then(|| keymap::hint(Action::ToggleStatus))
+                .flatten(),
             Some(Message::Write {
                 root: root.to_owned(),
                 id: issue.id.clone(),

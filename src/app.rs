@@ -15,13 +15,15 @@ use gbtracker::gitbug::{self, GitBugError, Issue, IssueDetail, Kind, Status, Wri
 use gbtracker::workspace::{self, RepoInfo, Root, RootKind, ThemePref, Workspace};
 use gbtracker::writes::WriteQueue;
 use iced::animation::{Animation, Easing};
-use iced::keyboard::{self, key::Named};
+use iced::keyboard::{self, Key, Modifiers};
 use iced::theme::Mode as SystemMode;
 use iced::time::Instant;
+use iced::widget::operation::{self, RelativeOffset};
 use iced::widget::text_editor;
 use iced::{Element, Subscription, Task, Theme, clipboard, event, time, window};
 use tokio::sync::Semaphore;
 
+use crate::keymap::{self, Action, Context};
 use crate::theme::Mode;
 use crate::{Section, ui};
 
@@ -30,6 +32,8 @@ const TRACK_EVERY: Duration = Duration::from_secs(5);
 const SPIN_EVERY: Duration = Duration::from_millis(250);
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(150);
 pub const PAGE_SIZE: usize = 200;
+pub const SEARCH_ID: &str = "issue-search";
+pub const LIST_ID: &str = "issue-list";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadState {
@@ -241,6 +245,9 @@ pub struct App {
     /// Expanded epic cards, keyed by repo root and epic id so they survive reloads.
     pub expanded: HashSet<(PathBuf, String)>,
     pub detail: Option<DetailPane>,
+    /// Keyboard-selected issue; follows clicks, and drives `Enter` and `x`.
+    pub cursor: Option<(PathBuf, String)>,
+    pub help: bool,
     detail_cache: DetailCache,
     /// Issues with a write in flight, by repo root and id; their actions stay disabled.
     pub pending: HashSet<(PathBuf, String)>,
@@ -272,6 +279,14 @@ pub enum Message {
     Frame(Instant),
     Navigate(Section),
     Noop,
+    KeyPressed {
+        key: Key,
+        modifiers: Modifiers,
+        typing: bool,
+    },
+    FocusSearch,
+    OpenCursor,
+    ToggleHelp,
     ToggleKind(Kind),
     SetStatus(StatusFilter),
     SetState(StateFilter),
@@ -419,6 +434,8 @@ impl App {
             epics: Vec::new(),
             expanded: HashSet::new(),
             detail: None,
+            cursor: None,
+            help: false,
             detail_cache: DetailCache::default(),
             pending: HashSet::new(),
             write_errors: HashMap::new(),
@@ -548,6 +565,30 @@ impl App {
                 Task::none()
             }
             Message::Noop => Task::none(),
+            Message::KeyPressed {
+                key,
+                modifiers,
+                typing,
+            } => {
+                let ctx = Context {
+                    typing,
+                    section: self.section,
+                    help_open: self.help,
+                };
+                match keymap::resolve(&key, modifiers, ctx) {
+                    Some(action) => self.perform(action),
+                    None => Task::none(),
+                }
+            }
+            Message::FocusSearch => {
+                self.section = Section::Issues;
+                operation::focus(SEARCH_ID)
+            }
+            Message::OpenCursor => self.open_cursor(),
+            Message::ToggleHelp => {
+                self.help = !self.help;
+                Task::none()
+            }
             Message::ToggleKind(kind) => {
                 self.filter.toggle_kind(kind);
                 self.apply_filter();
@@ -613,6 +654,7 @@ impl App {
                 Task::none()
             }
             Message::SelectIssue { root, id } => {
+                self.cursor = Some((root.clone(), id.clone()));
                 let issue = self
                     .repos
                     .iter()
@@ -625,6 +667,10 @@ impl App {
                 }
             }
             Message::CloseDetail => {
+                if self.help {
+                    self.help = false;
+                    return Task::none();
+                }
                 match &self.done {
                     Some(sheet) if sheet.can_dismiss() => self.done = None,
                     Some(_) => {}
@@ -792,6 +838,88 @@ impl App {
     }
 
     /// Shows the pane at once from the in-memory summary; fetches only when nothing current is cached or in flight.
+    fn perform(&mut self, action: Action) -> Task<Message> {
+        match action {
+            Action::Goto(section) => self.update(Message::Navigate(section)),
+            Action::ToggleSidebar => self.update(Message::ToggleSidebar),
+            Action::FocusSearch => self.update(Message::FocusSearch),
+            Action::CycleTheme => self.update(Message::ToggleTheme),
+            Action::Rescan => self.update(Message::Rescan),
+            Action::Next => self.move_cursor(1),
+            Action::Previous => self.move_cursor(-1),
+            Action::Open => self.open_cursor(),
+            Action::ToggleStatus => self.toggle_cursor_status(),
+            Action::Help => self.update(Message::ToggleHelp),
+            Action::Escape => self.update(Message::CloseDetail),
+        }
+    }
+
+    fn cursor_index(&self) -> Option<usize> {
+        let (root, id) = self.cursor.as_ref()?;
+        self.rows.iter().position(|r| {
+            let entry = &self.repos[r.repo];
+            entry.info.root == *root && entry.issues[r.issue].id == *id
+        })
+    }
+
+    fn row_target(&self, index: usize) -> (PathBuf, Issue) {
+        let row = &self.rows[index];
+        let entry = &self.repos[row.repo];
+        (entry.info.root.clone(), entry.issues[row.issue].clone())
+    }
+
+    /// Moves the keyboard cursor; an open detail pane follows it.
+    fn move_cursor(&mut self, step: isize) -> Task<Message> {
+        if self.rows.is_empty() {
+            return Task::none();
+        }
+        let last = self.rows.len() - 1;
+        let next = match self.cursor_index() {
+            Some(at) => at.saturating_add_signed(step).min(last),
+            None => 0,
+        };
+        while next >= self.shown {
+            self.shown += PAGE_SIZE;
+        }
+        let (root, issue) = self.row_target(next);
+        self.cursor = Some((root.clone(), issue.id.clone()));
+        // Rows are uniform, so a proportional offset keeps row `next` fully in view.
+        let visible = self.rows.len().min(self.shown);
+        let y = if visible > 1 {
+            next as f32 / (visible - 1) as f32
+        } else {
+            0.0
+        };
+        let scroll = operation::snap_to(LIST_ID, RelativeOffset { x: 0.0, y });
+        if self.detail.is_some() {
+            Task::batch([scroll, self.open_detail(root, issue)])
+        } else {
+            scroll
+        }
+    }
+
+    fn open_cursor(&mut self) -> Task<Message> {
+        if self.rows.is_empty() {
+            return Task::none();
+        }
+        let at = self.cursor_index().unwrap_or(0);
+        let (root, issue) = self.row_target(at);
+        self.cursor = Some((root.clone(), issue.id.clone()));
+        self.open_detail(root, issue)
+    }
+
+    fn toggle_cursor_status(&mut self) -> Task<Message> {
+        let Some(at) = self.cursor_index() else {
+            return Task::none();
+        };
+        let (root, issue) = self.row_target(at);
+        let op = match issue.status {
+            Status::Closed => WriteOp::Reopen,
+            _ => WriteOp::Close,
+        };
+        self.start_write(root, issue.id, op)
+    }
+
     fn open_detail(&mut self, root: PathBuf, issue: Issue) -> Task<Message> {
         self.drafts
             .entry((root.clone(), issue.id.clone()))
@@ -1394,9 +1522,19 @@ impl App {
             event::listen_with(|event, status, _| match event {
                 event::Event::Window(window::Event::Focused) => Some(Message::Refocused),
                 event::Event::Keyboard(keyboard::Event::KeyPressed {
-                    key: keyboard::Key::Named(Named::Escape),
+                    key,
+                    modified_key,
+                    modifiers,
                     ..
-                }) if status == event::Status::Ignored => Some(Message::CloseDetail),
+                }) => Some(Message::KeyPressed {
+                    key: if modifiers.command() {
+                        key
+                    } else {
+                        modified_key
+                    },
+                    modifiers,
+                    typing: status == event::Status::Captured,
+                }),
                 _ => None,
             }),
         ];
@@ -1442,6 +1580,7 @@ mod tests {
     use std::collections::HashMap;
 
     use gbtracker::cache::CachedIssues;
+    use iced::keyboard::key::Named;
 
     use super::*;
 
@@ -2368,6 +2507,204 @@ mod tests {
             repos: vec![],
         });
         assert!(app.done.is_none());
+    }
+
+    fn press(app: &mut App, key: Key, modifiers: Modifiers, typing: bool) -> Task<Message> {
+        app.update(Message::KeyPressed {
+            key,
+            modifiers,
+            typing,
+        })
+    }
+
+    fn tap_task(app: &mut App, key: &str) -> Task<Message> {
+        press(app, Key::Character(key.into()), Modifiers::NONE, false)
+    }
+
+    fn cmd_task(app: &mut App, key: &str) -> Task<Message> {
+        press(app, Key::Character(key.into()), Modifiers::COMMAND, false)
+    }
+
+    fn tap(app: &mut App, key: &str) {
+        let _ = tap_task(app, key);
+    }
+
+    fn cmd(app: &mut App, key: &str) {
+        let _ = cmd_task(app, key);
+    }
+
+    fn enter(app: &mut App) {
+        let _ = press(app, Key::Named(Named::Enter), Modifiers::NONE, false);
+    }
+
+    fn escape(app: &mut App, typing: bool) {
+        let _ = press(app, Key::Named(Named::Escape), Modifiers::NONE, typing);
+    }
+
+    fn numbered(count: usize) -> App {
+        let mut app = booted(&["a"]);
+        app.send(Message::Fingerprinted {
+            epoch: 1,
+            root: info("a").root,
+            result: Ok("new".into()),
+        });
+        app.send(Message::Loaded {
+            epoch: 1,
+            root: info("a").root,
+            fingerprint: "new".into(),
+            result: Ok((0..count)
+                .map(|n| Issue {
+                    id: format!("{n:064}"),
+                    ..titled(&format!("issue {n}"), Status::Open)
+                })
+                .collect()),
+        });
+        app.section = Section::Issues;
+        app
+    }
+
+    fn cursor_title(app: &App) -> Option<String> {
+        app.cursor_index()
+            .map(|i| app.row_target(i).1.title.clone())
+    }
+
+    fn detail_title(app: &App) -> Option<&str> {
+        app.detail.as_ref().map(|p| p.summary.title.as_str())
+    }
+
+    #[test]
+    fn command_digits_navigate_and_b_toggles_the_sidebar() {
+        let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
+        app.config_locked = true;
+        cmd(&mut app, "3");
+        assert_eq!(app.section, Section::ALL[2]);
+        cmd(&mut app, "8");
+        assert_eq!(app.section, Section::ALL[7]);
+        cmd(&mut app, "b");
+        assert!(app.workspace.sidebar_collapsed);
+    }
+
+    #[test]
+    fn command_shift_l_cycles_the_theme() {
+        let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
+        app.config_locked = true;
+        let mods = Modifiers::COMMAND | Modifiers::SHIFT;
+        let _ = press(&mut app, Key::Character("l".into()), mods, false);
+        assert_eq!(app.workspace.theme, ThemePref::Light);
+    }
+
+    #[test]
+    fn command_k_and_f_land_on_issues_search() {
+        for key in ["k", "f"] {
+            let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
+            assert_eq!(app.section, Section::Repositories);
+            assert_eq!(cmd_task(&mut app, key).units(), 1, "focus operation");
+            assert_eq!(app.section, Section::Issues);
+        }
+        let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
+        assert_eq!(app.update(Message::FocusSearch).units(), 1);
+        assert_eq!(app.section, Section::Issues);
+    }
+
+    #[test]
+    fn command_r_rescans() {
+        let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
+        assert!(!app.discovering);
+        cmd(&mut app, "r");
+        assert!(app.discovering);
+    }
+
+    #[test]
+    fn j_and_k_move_the_cursor_and_clamp() {
+        let mut app = numbered(3);
+        assert_eq!(cursor_title(&app), None);
+        tap(&mut app, "j");
+        assert_eq!(cursor_title(&app).as_deref(), Some("issue 0"));
+        tap(&mut app, "j");
+        tap(&mut app, "j");
+        tap(&mut app, "j");
+        assert_eq!(cursor_title(&app).as_deref(), Some("issue 2"));
+        tap(&mut app, "k");
+        assert_eq!(cursor_title(&app).as_deref(), Some("issue 1"));
+        for _ in 0..2 {
+            let _ = press(&mut app, Key::Named(Named::ArrowUp), Modifiers::NONE, false);
+        }
+        assert_eq!(cursor_title(&app).as_deref(), Some("issue 0"));
+        assert!(app.detail.is_none(), "moving alone does not open anything");
+    }
+
+    #[test]
+    fn single_keys_do_nothing_while_typing_or_off_the_issues_page() {
+        let mut app = numbered(3);
+        let _ = press(&mut app, Key::Character("j".into()), Modifiers::NONE, true);
+        assert_eq!(app.cursor, None);
+        app.section = Section::Epics;
+        tap(&mut app, "j");
+        assert_eq!(app.cursor, None);
+    }
+
+    #[test]
+    fn enter_opens_the_cursor_and_an_open_pane_follows_moves() {
+        let mut app = numbered(3);
+        tap(&mut app, "j");
+        tap(&mut app, "j");
+        assert!(app.detail.is_none());
+        enter(&mut app);
+        assert_eq!(detail_title(&app), Some("issue 1"));
+        tap(&mut app, "j");
+        assert_eq!(detail_title(&app), Some("issue 2"));
+        assert_eq!(cursor_title(&app).as_deref(), Some("issue 2"));
+    }
+
+    #[test]
+    fn submitting_the_search_opens_the_first_result() {
+        let mut app = numbered(3);
+        app.send(Message::OpenCursor);
+        assert_eq!(detail_title(&app), Some("issue 0"));
+    }
+
+    #[test]
+    fn x_closes_the_cursor_issue() {
+        let mut app = numbered(2);
+        assert_eq!(tap_task(&mut app, "x").units(), 0, "no cursor, no write");
+        tap(&mut app, "j");
+        tap(&mut app, "j");
+        assert_eq!(tap_task(&mut app, "x").units(), 1);
+        assert!(app.is_pending(&info("a").root, &format!("{:064}", 1)));
+        assert!(!app.is_pending(&info("a").root, &format!("{:064}", 0)));
+    }
+
+    #[test]
+    fn question_mark_toggles_help_and_escape_closes_it_before_the_pane() {
+        let mut app = numbered(2);
+        tap(&mut app, "j");
+        enter(&mut app);
+        tap(&mut app, "?");
+        assert!(app.help);
+        tap(&mut app, "j");
+        assert_eq!(
+            cursor_title(&app).as_deref(),
+            Some("issue 0"),
+            "help is modal"
+        );
+        escape(&mut app, false);
+        assert!(!app.help);
+        assert!(app.detail.is_some());
+        escape(&mut app, false);
+        assert!(app.detail.is_none());
+        cmd(&mut app, "/");
+        assert!(app.help);
+        cmd(&mut app, "/");
+        assert!(!app.help);
+    }
+
+    #[test]
+    fn escape_while_typing_leaves_the_pane_alone() {
+        let mut app = numbered(1);
+        enter(&mut app);
+        assert!(app.detail.is_some());
+        escape(&mut app, true);
+        assert!(app.detail.is_some());
     }
 
     #[test]
