@@ -255,9 +255,9 @@ fn section<'a>(title: &'a str, content: Element<'a, Message>) -> Element<'a, Mes
 
 fn rendered<'a>(
     content: &'a markdown::Content,
-    settings: markdown::Settings,
+    settings: &markdown::Settings,
 ) -> Element<'a, Message> {
-    markdown::view(content.items(), settings).map(|_| Message::Noop)
+    markdown::view(content.items(), *settings).map(|_| Message::Noop)
 }
 
 fn body<'a>(app: &'a App, pane: &'a DetailPane) -> Element<'a, Message> {
@@ -286,7 +286,7 @@ fn body<'a>(app: &'a App, pane: &'a DetailPane) -> Element<'a, Message> {
         .into(),
         DetailState::Ready(loaded) => {
             let settings = markdown::Settings::with_text_size(14, app.theme());
-            let mut out = column![rendered(&loaded.body, settings)].spacing(24);
+            let mut out = column![rendered(&loaded.body, &settings)].spacing(24);
             if !loaded.comments.is_empty() {
                 let comments = loaded.detail.comments.iter().zip(&loaded.comments).map(
                     |(comment, content)| {
@@ -299,7 +299,7 @@ fn body<'a>(app: &'a App, pane: &'a DetailPane) -> Element<'a, Message> {
                                         .style(style::subtle),
                                 ]
                                 .spacing(10),
-                                rendered(content, settings),
+                                rendered(content, &settings),
                             ]
                             .spacing(10),
                         )

@@ -471,8 +471,7 @@ mod tests {
     #[test]
     fn help_lists_every_action_once_with_all_its_chords() {
         let all: Vec<_> = Group::ALL.iter().flat_map(|g| rows(*g, false)).collect();
-        let labels: Vec<_> = all.iter().map(|(l, _)| l.as_str()).collect();
-        assert_eq!(labels.len(), 4 + 2 + 4 + 5);
+        assert_eq!(all.len(), 4 + 2 + 4 + 5);
         let search = all.iter().find(|(l, _)| l == "Search issues").unwrap();
         assert_eq!(search.1, ["Ctrl+K", "Ctrl+F"]);
         let help = all

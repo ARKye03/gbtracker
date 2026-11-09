@@ -851,7 +851,7 @@ impl App {
                 id,
                 op,
                 result,
-            } => self.on_written(root, id, op, result),
+            } => self.on_written(&root, &id, &op, result),
             Message::EditComment { root, id, action } => {
                 if let Some(draft) = self.drafts.get_mut(&root, &id) {
                     draft.perform(action);
@@ -966,7 +966,7 @@ impl App {
                 root,
                 fingerprint,
                 result,
-            } => self.on_loaded(epoch, root, fingerprint, result),
+            } => self.on_loaded(epoch, &root, fingerprint, result),
             Message::Persisted(result) => {
                 if let Err(e) = result {
                     self.set_notice(format!("save failed: {e}"));
@@ -1132,6 +1132,10 @@ impl App {
         }
         // Rows are uniform, so a proportional offset keeps the row fully in view.
         let visible = self.rows.len().min(self.shown);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "row indices are far below f32's exact integer range; the offset is a UI fraction"
+        )]
         let y = if visible > 1 {
             index as f32 / (visible - 1) as f32
         } else {
@@ -1420,9 +1424,9 @@ impl App {
 
     fn on_written(
         &mut self,
-        root: PathBuf,
-        id: String,
-        op: WriteOp,
+        root: &Path,
+        id: &str,
+        op: &WriteOp,
         result: Result<Box<IssueDetail>, String>,
     ) -> Task<Message> {
         let outcome = result.as_ref().map(|_| ()).map_err(Clone::clone);
@@ -1432,13 +1436,13 @@ impl App {
             && self
                 .done
                 .as_ref()
-                .is_some_and(|s| s.root == root && s.is_waiting(&id));
+                .is_some_and(|s| s.root == root && s.is_waiting(id));
         if !from_done {
-            self.notify_write(&root, &id, &op, &outcome);
+            self.notify_write(root, id, op, &outcome);
         }
-        let applied = self.apply_written(root.clone(), id.clone(), op, result);
+        let applied = self.apply_written(root.to_path_buf(), id.to_owned(), op, result);
         if closed {
-            Task::batch([applied, self.done_progress(&root, &id, outcome)])
+            Task::batch([applied, self.done_progress(root, id, outcome)])
         } else {
             applied
         }
@@ -1449,7 +1453,7 @@ impl App {
         &mut self,
         root: PathBuf,
         id: String,
-        op: WriteOp,
+        op: &WriteOp,
         result: Result<Box<IssueDetail>, String>,
     ) -> Task<Message> {
         self.pending.remove(&root, &id);
@@ -1795,7 +1799,7 @@ impl App {
     fn on_loaded(
         &mut self,
         epoch: u64,
-        root: PathBuf,
+        root: &Path,
         fingerprint: String,
         result: Result<Vec<Issue>, LoadFailure>,
     ) -> Task<Message> {
@@ -1814,7 +1818,7 @@ impl App {
                 self.refilter();
                 Task::batch([
                     self.persist_issues(info, fingerprint, issues),
-                    self.sync_detail(&root),
+                    self.sync_detail(root),
                 ])
             }
             Err(LoadFailure::Locked) => {
@@ -3196,8 +3200,7 @@ mod tests {
     }
 
     fn cursor_title(app: &App) -> Option<String> {
-        app.cursor_index()
-            .map(|i| app.row_target(i).1.title.clone())
+        app.cursor_index().map(|i| app.row_target(i).1.title)
     }
 
     fn detail_title(app: &App) -> Option<&str> {

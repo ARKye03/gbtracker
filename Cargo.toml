@@ -15,3 +15,18 @@ tokio = { version = "1.54.1", features = ["process", "sync", "time", "macros", "
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+redundant_clone = "warn"
+needless_pass_by_value = "warn"
+large_types_passed_by_value = "warn"
+redundant_closure_for_method_calls = "warn"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_precision_loss = "warn"
+unchecked_time_subtraction = "warn"
+implicit_clone = "warn"
+needless_collect = "warn"

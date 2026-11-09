@@ -470,7 +470,7 @@ mod tests {
         let t0 = Instant::now();
         let pending = next_phase(Phase::Idle, t0, true, false, false);
         assert_eq!(pending, Phase::Pending(t0));
-        let early = t0 + OPEN_DELAY - Duration::from_millis(1);
+        let early = t0 + OPEN_DELAY.saturating_sub(Duration::from_millis(1));
         assert_eq!(next_phase(pending, early, true, false, false), pending);
         let due = t0 + OPEN_DELAY;
         assert_eq!(next_phase(pending, due, true, false, false), Phase::Open);
@@ -488,7 +488,7 @@ mod tests {
         assert!(!is_warm(None, t0));
         assert!(is_warm(
             Some(t0),
-            t0 + WARM_WINDOW - Duration::from_millis(1)
+            t0 + WARM_WINDOW.saturating_sub(Duration::from_millis(1))
         ));
         assert!(!is_warm(Some(t0), t0 + WARM_WINDOW));
     }

@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::Notify;
 
@@ -23,7 +23,7 @@ struct LaneState {
 
 impl Lane {
     fn finish(&self, id: u64) {
-        let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let state = &mut *guard;
         state.done.insert(id);
         while state.done.remove(&state.serving) {
@@ -34,7 +34,11 @@ impl Lane {
     }
 
     fn is_serving(&self, id: u64) -> bool {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).serving == id
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .serving
+            == id
     }
 }
 
@@ -47,7 +51,7 @@ impl WriteQueue {
     /// Takes the next place in the repo's line. Call it synchronously, in issue order; await `Ticket::turn` later.
     pub fn enter(&mut self, root: &Path) -> Ticket {
         let lane = Arc::clone(self.lanes.entry(root.to_owned()).or_default());
-        let mut state = lane.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = lane.state.lock().unwrap_or_else(PoisonError::into_inner);
         let id = state.next;
         state.next += 1;
         drop(state);

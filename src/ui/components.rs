@@ -204,6 +204,11 @@ where
     .into()
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "floored column count of a non-negative layout width; the cast saturates"
+)]
 fn grid_columns(width: f32, min_width: f32, gap: f32) -> usize {
     (((width + gap) / (min_width + gap)).floor() as usize).max(1)
 }
@@ -252,6 +257,11 @@ pub fn detail_row<'a, M: 'a>(label: &'a str, value: impl text::IntoFragment<'a>)
 /// Thin bar with done% on the left and remaining% on the right, colored by tone.
 pub fn split_progress<'a, M: 'a>(ratio: f32) -> Element<'a, M> {
     let tone = Tone::for_ratio(ratio);
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "ratio is within 0..=1, so the percentage fits u32"
+    )]
     let done = (ratio * 100.0).round() as u32;
     column![
         progress_bar(0.0..=1.0, ratio)

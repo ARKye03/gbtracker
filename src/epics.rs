@@ -23,6 +23,10 @@ pub struct EpicSummary {
 }
 
 impl EpicSummary {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "issue counts are far below f32's 2^24 exact range; the ratio only drives a progress bar"
+    )]
     pub fn ratio(&self) -> f32 {
         if self.total == 0 {
             0.0

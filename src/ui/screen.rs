@@ -510,6 +510,10 @@ fn overview(app: &App) -> Element<'_, Message> {
 
 fn overview_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
     let counts = epics::count_open(&entry.issues);
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "issue counts are far below f32's exact integer range; the ratio only drives a progress bar"
+    )]
     let ratio = if entry.issues.is_empty() {
         0.0
     } else {
@@ -1089,10 +1093,15 @@ fn issue_card(
         ),
     };
 
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "nesting depth is tiny; exact in f32"
+    )]
+    let indent = depth as f32 * 32.0;
     container(row![card, toggle].spacing(8).align_y(Alignment::Center))
         .width(Fill)
         .padding(Padding {
-            left: depth as f32 * 32.0,
+            left: indent,
             ..Padding::ZERO
         })
         .into()

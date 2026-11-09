@@ -137,7 +137,7 @@ impl Widget<Message, Theme, Renderer> for Anchored<'_> {
 
     fn diff(&self, tree: &mut Tree) {
         let mut widgets = vec![self.content.as_widget()];
-        widgets.extend(self.panel.as_ref().map(|p| p.as_widget()));
+        widgets.extend(self.panel.as_ref().map(Element::as_widget));
         tree.diff_children(&widgets);
     }
 

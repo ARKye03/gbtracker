@@ -30,14 +30,14 @@ fn filled(bg: Color, fg: Color, r: f32) -> button::Style {
     }
 }
 
-fn dimmed(style: button::Style, status: button::Status) -> button::Style {
+fn dimmed(style: &button::Style, status: button::Status) -> button::Style {
     if status != button::Status::Disabled {
-        return style;
+        return *style;
     }
     button::Style {
         background: style.background.map(|b| b.scale_alpha(0.5)),
         text_color: style.text_color.scale_alpha(0.5),
-        ..style
+        ..*style
     }
 }
 
@@ -217,7 +217,7 @@ pub fn primary(theme: &Theme, status: button::Status) -> button::Style {
         button::Status::Hovered | button::Status::Pressed => t.accent_hover,
         _ => t.accent,
     };
-    dimmed(filled(bg, t.on_accent, radius::MD), status)
+    dimmed(&filled(bg, t.on_accent, radius::MD), status)
 }
 
 pub fn secondary(theme: &Theme, status: button::Status) -> button::Style {
@@ -226,7 +226,7 @@ pub fn secondary(theme: &Theme, status: button::Status) -> button::Style {
         button::Status::Hovered | button::Status::Pressed => t.fill_hover,
         _ => t.fill,
     };
-    dimmed(filled(bg, t.text, radius::MD), status)
+    dimmed(&filled(bg, t.text, radius::MD), status)
 }
 
 /// Top-bar pill (Search, New Bug, inactive tabs, icon buttons).
@@ -236,7 +236,7 @@ pub fn pill(theme: &Theme, status: button::Status) -> button::Style {
         button::Status::Hovered | button::Status::Pressed => t.fill_hover,
         _ => t.fill.scale_alpha(0.6),
     };
-    dimmed(filled(bg, t.text, radius::LG), status)
+    dimmed(&filled(bg, t.text, radius::LG), status)
 }
 
 /// Selected filter chip / active top pill: tinted fill, accent border and text.
