@@ -123,6 +123,8 @@ fn place(anchor: Rectangle, size: Size, viewport: Size, gap: f32) -> Placement {
 struct State {
     phase: Phase,
     fade: Animation<bool>,
+    /// The renderer holds text paragraphs weakly, so they must live in a tree that outlasts the frame.
+    body: Option<Tree>,
 }
 
 impl Default for State {
@@ -130,6 +132,7 @@ impl Default for State {
         Self {
             phase: Phase::Idle,
             fade: Animation::new(false).easing(Easing::EaseOut),
+            body: None,
         }
     }
 }
@@ -294,7 +297,7 @@ impl<M> Widget<M, Theme, Renderer> for Tooltip<'_, M> {
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, M, Theme, Renderer>> {
-        let state = tree.state.downcast_ref::<State>();
+        let state = tree.state.downcast_mut::<State>();
         let now = Instant::now();
         let progress = state
             .shown(now)
@@ -310,9 +313,16 @@ impl<M> Widget<M, Theme, Renderer> for Tooltip<'_, M> {
 
         let tooltip = progress.map(|progress| {
             let body = tooltip_body(&self.label, self.shortcut.as_deref(), progress);
+            let body_tree = match &mut state.body {
+                Some(existing) => {
+                    existing.diff(body.as_widget());
+                    existing
+                }
+                empty => empty.insert(Tree::new(&body)),
+            };
             overlay::Element::new(Box::new(Floating {
                 anchor: Rectangle::new(layout.position() + translation, layout.bounds().size()),
-                tree: Tree::new(&body),
+                tree: body_tree,
                 body,
                 progress,
             }))
@@ -371,14 +381,14 @@ fn tooltip_body<'a, M: 'a>(label: &str, shortcut: Option<&str>, alpha: f32) -> E
 struct Floating<'b, M> {
     anchor: Rectangle,
     body: Element<'b, M>,
-    tree: Tree,
+    tree: &'b mut Tree,
     progress: f32,
 }
 
 impl<M> overlay::Overlay<M, Theme, Renderer> for Floating<'_, M> {
     fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node {
         let node = self.body.as_widget_mut().layout(
-            &mut self.tree,
+            self.tree,
             renderer,
             &layout::Limits::new(Size::ZERO, bounds),
         );
@@ -400,7 +410,7 @@ impl<M> overlay::Overlay<M, Theme, Renderer> for Floating<'_, M> {
         _cursor: mouse::Cursor,
     ) {
         self.body.as_widget().draw(
-            &self.tree,
+            self.tree,
             renderer,
             theme,
             defaults,
