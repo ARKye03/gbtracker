@@ -1933,7 +1933,7 @@ impl App {
         let Some(cache) = self.cache.clone() else {
             return Task::none();
         };
-        let ticket = self.persists.enter(&info.root);
+        let ticket = self.persists.enter(&info.common_dir);
         persisted(run_ordered(ticket, move || {
             cache
                 .save_issues(&info, &fingerprint, &issues)
