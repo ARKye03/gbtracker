@@ -199,7 +199,11 @@ impl<M> Widget<M, Theme, Renderer> for Tooltip<'_, M> {
                 Event::Mouse(mouse::Event::ButtonPressed(_) | mouse::Event::WheelScrolled { .. })
             );
             let warm = is_warm(LAST_SHOWN.get(), now);
-            let before = state.phase;
+            // A pending tooltip re-reads warmth: an earlier sibling can refresh LAST_SHOWN after this one ran.
+            let before = match state.phase {
+                Phase::Pending(_) if warm => Phase::Idle,
+                phase => phase,
+            };
             let after = next_phase(before, now, hovering, dismissed, warm);
             state.phase = after;
 
@@ -217,6 +221,9 @@ impl<M> Widget<M, Theme, Renderer> for Tooltip<'_, M> {
                 _ => {}
             }
             if let Phase::Pending(since) = after {
+                if before == Phase::Idle {
+                    shell.request_redraw();
+                }
                 shell.request_redraw_at(since + OPEN_DELAY);
             }
             if state.fade.is_animating(now) {
