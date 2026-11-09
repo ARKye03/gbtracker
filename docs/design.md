@@ -5,8 +5,8 @@ Desktop app (Rust, iced 0.14) that wraps directories using git-bug. Visual targe
 ## Run
 
 ```sh
-cargo run                         # light
-GBTRACKER_THEME=dark cargo run    # dark (or use the moon/sun button in the top bar)
+cargo run                         # follows OS theme (or cycle System/Light/Dark with the top bar button)
+GBTRACKER_THEME=dark cargo run    # force dark for this run
 ```
 
 ## Code map

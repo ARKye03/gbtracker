@@ -39,6 +39,13 @@ pub enum GitBugError {
     MissingBody(String),
 }
 
+impl GitBugError {
+    /// A create that failed after `bug new` wrote the bug; retrying would file a duplicate.
+    pub fn is_partial_create(&self) -> bool {
+        matches!(self, Self::Unlabelled { .. } | Self::UnexpectedOutput(_))
+    }
+}
+
 fn pid_suffix(pid: Option<u32>) -> String {
     pid.map(|p| format!(" (pid {p})")).unwrap_or_default()
 }
@@ -276,7 +283,6 @@ pub async fn show(root: &Path, full_id: &str) -> Result<IssueDetail, GitBugError
     Ok(detail)
 }
 
-/// The identity git-bug acts as in a repo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
     pub name: String,

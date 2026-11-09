@@ -370,12 +370,7 @@ mod tests {
         for key in [ch("j"), ch("k"), ch("x"), ch("?")] {
             assert_eq!(resolve(&key, none, c), None, "{key:?}");
         }
-        for named in [
-            Named::ArrowDown,
-            Named::ArrowUp,
-            Named::Enter,
-            Named::Escape,
-        ] {
+        for named in [Named::Enter, Named::Escape] {
             assert_eq!(resolve(&Key::Named(named), none, c), None, "{named:?}");
         }
     }

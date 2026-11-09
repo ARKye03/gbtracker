@@ -58,7 +58,7 @@ pub struct Tokens {
     pub app_bg: Color,
     /// Rounded content panel below the top bar.
     pub panel: Color,
-    /// Cards, active tab, active nav item.
+    /// Cards, popovers, tooltips, active nav item.
     pub surface: Color,
     /// Neutral fills: secondary buttons, icon buttons, tab pills.
     pub fill: Color,

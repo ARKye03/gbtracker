@@ -253,15 +253,14 @@ pub async fn create(root: &Path, new: &NewIssue) -> Result<IssueDetail, GitBugEr
     let args: Vec<&str> = plan.new_args.iter().map(String::as_str).collect();
     let out = cli::run(root, &args).await?;
     let human = parse_created(&out).ok_or_else(|| GitBugError::UnexpectedOutput(out.clone()))?;
-    let full = show(root, human).await?.issue.id;
+    let unlabelled = |e: GitBugError| GitBugError::Unlabelled {
+        id: human.to_owned(),
+        cause: e.to_string(),
+    };
+    let full = show(root, human).await.map_err(unlabelled)?.issue.id;
     let labels = plan.label_args(&full);
     let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
-    cli::run(root, &labels)
-        .await
-        .map_err(|e| GitBugError::Unlabelled {
-            id: human.to_owned(),
-            cause: e.to_string(),
-        })?;
+    cli::run(root, &labels).await.map_err(unlabelled)?;
     show(root, &full).await
 }
 

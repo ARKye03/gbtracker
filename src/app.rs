@@ -326,6 +326,21 @@ pub struct App {
 }
 
 #[derive(Debug, Clone)]
+pub struct CreateFailure {
+    msg: String,
+    partial: bool,
+}
+
+impl From<&str> for CreateFailure {
+    fn from(msg: &str) -> Self {
+        Self {
+            msg: msg.to_owned(),
+            partial: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Message {
     ToggleTheme,
     SystemTheme(SystemMode),
@@ -402,7 +417,7 @@ pub enum Message {
     SubmitNewIssue,
     IssueCreated {
         root: PathBuf,
-        result: Result<Box<IssueDetail>, String>,
+        result: Result<Box<IssueDetail>, CreateFailure>,
     },
     Identified(Option<Identity>),
     TogglePopover(Popover),
@@ -1227,7 +1242,10 @@ impl App {
                 let result = gitbug::create(&root, &new)
                     .await
                     .map(Box::new)
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| CreateFailure {
+                        partial: e.is_partial_create(),
+                        msg: e.to_string(),
+                    });
                 (root, result)
             },
             |(root, result)| Message::IssueCreated { root, result },
@@ -1238,23 +1256,26 @@ impl App {
     fn on_created(
         &mut self,
         root: PathBuf,
-        result: Result<Box<IssueDetail>, String>,
+        result: Result<Box<IssueDetail>, CreateFailure>,
     ) -> Task<Message> {
         let detail = match result {
             Ok(detail) => *detail,
-            Err(msg) => {
-                match self
+            Err(CreateFailure { msg, partial }) => {
+                let in_flight = self
                     .new_issue
-                    .as_mut()
-                    .filter(|f| f.root == root && f.submitting)
-                {
+                    .as_ref()
+                    .is_some_and(|f| f.root == root && f.submitting);
+                // Retrying a partly applied create would file a duplicate, so the form closes and the half-made bug shows in the list.
+                if in_flight && partial {
+                    self.new_issue = None;
+                }
+                match self.new_issue.as_mut().filter(|_| in_flight) {
                     Some(form) => {
                         form.submitting = false;
                         form.error = Some(msg);
                     }
                     None => self.notify(Tone::Danger, "Could not create issue", Some(msg)),
                 }
-                // A partly applied create (bug written, labels failed) still shows up in the list.
                 return self.check_tracked();
             }
         };
@@ -3527,6 +3548,23 @@ mod tests {
         assert_eq!(f.title, "boom");
         assert_eq!(f.error.as_deref(), Some("git-bug bug new failed: nope"));
         assert!(app.notifications.is_empty());
+    }
+
+    #[test]
+    fn a_partly_applied_create_closes_the_form_instead_of_inviting_a_duplicate() {
+        let mut app = booted(&["a"]);
+        app.send(Message::OpenNewIssue(NewKind::Bug));
+        fill(&mut app, "half");
+        let _ = app.update(Message::SubmitNewIssue);
+        app.send(Message::IssueCreated {
+            root: info("a").root,
+            result: Err(CreateFailure {
+                msg: "created abc1234 but could not label it: nope".into(),
+                partial: true,
+            }),
+        });
+        assert!(app.new_issue.is_none());
+        assert_eq!(app.notifications.len(), 1);
     }
 
     #[test]
