@@ -110,6 +110,7 @@ impl From<WorkspaceFile> for Workspace {
         let theme = match (f.theme, f.dark) {
             (Some(theme), _) => theme,
             (None, Some(true)) => ThemePref::Dark,
+            (None, Some(false)) => ThemePref::Light,
             (None, _) => ThemePref::System,
         };
         Workspace {
@@ -529,10 +530,7 @@ mod tests {
             ThemePref::System
         );
         fs::write(&path, r#"{"dark": false}"#).unwrap();
-        assert_eq!(
-            Workspace::load_from(&path).unwrap().theme,
-            ThemePref::System
-        );
+        assert_eq!(Workspace::load_from(&path).unwrap().theme, ThemePref::Light);
         fs::write(&path, r#"{"dark": true}"#).unwrap();
         assert_eq!(Workspace::load_from(&path).unwrap().theme, ThemePref::Dark);
         fs::write(&path, r#"{"dark": true, "theme": "Light"}"#).unwrap();

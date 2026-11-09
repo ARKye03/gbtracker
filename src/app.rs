@@ -524,6 +524,7 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ToggleTheme => {
+                self.theme_override = None;
                 self.workspace.theme = self.workspace.theme.next();
                 self.persist_workspace()
             }
