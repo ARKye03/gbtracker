@@ -468,9 +468,18 @@ fn overview(app: &App) -> Element<'_, Message> {
             column((0..3).map(|_| skeleton_card())).spacing(16).into()
         } else {
             container(
-                text("No repositories with git-bug yet.")
-                    .size(14)
-                    .style(style::muted),
+                column![
+                    text("No repositories with git-bug yet.")
+                        .size(14)
+                        .style(style::muted),
+                    row![
+                        secondary_button("Add folder to scan", Message::PickFolder(RootKind::Scan)),
+                        primary_button("Add project", Message::PickFolder(RootKind::Project)),
+                    ]
+                    .spacing(12),
+                ]
+                .spacing(18)
+                .align_x(Alignment::Center),
             )
             .padding(48)
             .center_x(Fill)

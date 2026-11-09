@@ -40,12 +40,11 @@ GBTRACKER_THEME=dark cargo run    # force dark for this run
 | Org Settings tab | Active repo tab (`gbtracker`) |
 | Job Postings tab | Repositories, the list of wrapped dirs |
 | Talk to AI box | Sync status pill (dot uses `Tone`) |
-| Sidebar sections | Overview, Issues, Epics, Labels, Identities, Bridges, Analytics |
+| Sidebar sections | Overview, Issues, Epics, Repositories |
 | Budget card | Epic card: bug count, title, closed/open bar, details, labels, short id |
 | Add Budget | New Epic |
 
 ## Known gaps / next steps
 
-- **Dashed borders:** iced has none, so "Add Filters" uses a solid 1px `border`.
 - **Font:** uses the system sans. The proposal looks like Inter; to match it, bundle Inter with `.font(...)` and set `.default_font(...)`.
 - **Icons:** `lucide-iced` downloads Lucide at build time, so clean builds need network access.
