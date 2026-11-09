@@ -2,7 +2,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use iced::widget::{
-    button, column, container, lazy, pick_list, row, scrollable, space, text, text_input,
+    button, column, container, lazy, pick_list, row, scrollable, space, text, text::Wrapping,
+    text_input,
 };
 use iced::{Alignment, Element, Fill, Padding};
 use lucide_iced::icon as lu;
@@ -15,11 +16,14 @@ use super::components::{
 use super::{detail, done};
 use crate::Section;
 use crate::app::{App, LoadState, Message, RepoEntry, Row, ago};
-use crate::theme::{Mode, Tone, style};
+use crate::theme::{Tone, style};
 use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{Filter, StateFilter, StatusFilter};
 use gbtracker::gitbug::{Issue, Kind, State, Status, WriteOp};
-use gbtracker::workspace::{Root, RootKind};
+use gbtracker::workspace::{Root, RootKind, ThemePref};
+
+const SIDEBAR_WIDTH: f32 = 276.0;
+const RAIL_WIDTH: f32 = 64.0;
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let page = match app.section {
@@ -70,13 +74,14 @@ pub fn view(app: &App) -> Element<'_, Message> {
 }
 
 fn top_bar(app: &App) -> Element<'_, Message> {
-    let theme_icon = match app.mode {
-        Mode::Light => lu::moon(),
-        Mode::Dark => lu::sun(),
+    let theme_icon = match app.workspace.theme {
+        ThemePref::System => lu::monitor(),
+        ThemePref::Light => lu::sun(),
+        ThemePref::Dark => lu::moon(),
     };
 
     let left = row![
-        icon_pill(lu::panel_left(), Message::Noop),
+        icon_pill(lu::panel_left(), Message::ToggleSidebar),
         top_pill(labeled(lu::search(), "Search"), false, Message::Noop),
         top_pill(labeled(lu::plus(), "New Bug"), false, Message::Noop),
         vdivider(),
@@ -165,6 +170,9 @@ fn sync_pill(app: &App) -> Element<'_, Message> {
 }
 
 fn sidebar(app: &App) -> Element<'_, Message> {
+    let width = app.sidebar.interpolate(SIDEBAR_WIDTH, RAIL_WIDTH, app.now);
+    // Squared so labels are gone before the narrowing rail clips them.
+    let alpha = app.sidebar.interpolate(1.0_f32, 0.0, app.now).powi(2);
     let active = app.section;
     let items = Section::ALL.iter().map(|&s| {
         let (svg, label) = s.meta();
@@ -174,38 +182,54 @@ fn sidebar(app: &App) -> Element<'_, Message> {
                 .width(3)
                 .height(22)
                 .style(style::nav_bar(is_active)),
-            button(labeled(svg, label))
-                .width(Fill)
-                .padding([12, 16])
-                .style(if is_active {
-                    style::nav_item_active
-                } else {
-                    style::nav_item
-                })
-                .on_press(Message::Navigate(s))
+            button(
+                row![
+                    icon(svg, 16.0),
+                    text(label)
+                        .size(15)
+                        .wrapping(Wrapping::None)
+                        .style(style::faded(alpha))
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+            )
+            .width(Fill)
+            .padding([12, 16])
+            .style(if is_active {
+                style::nav_item_active
+            } else {
+                style::nav_item
+            })
+            .on_press(Message::Navigate(s))
         ]
         .spacing(4)
         .align_y(Alignment::Center)
         .into()
     });
 
-    column![
+    container(
         column![
-            text("Workspace").size(21),
-            text!(
-                "{} projects · {} repositories",
-                app.workspace.roots.len(),
-                app.repos.len()
-            )
-            .size(13)
-            .style(style::subtle),
+            column![
+                text("Workspace")
+                    .size(21)
+                    .wrapping(Wrapping::None)
+                    .style(style::faded(alpha)),
+                text!(
+                    "{} projects · {} repositories",
+                    app.workspace.roots.len(),
+                    app.repos.len()
+                )
+                .size(13)
+                .wrapping(Wrapping::None)
+                .style(style::faded_subtle(alpha)),
+            ]
+            .spacing(4),
+            column(items).spacing(6),
         ]
-        .spacing(4)
-        .padding([0, 0]),
-        column(items).spacing(6),
-    ]
-    .spacing(36)
-    .width(276)
+        .spacing(36),
+    )
+    .width(width)
+    .clip(true)
     .into()
 }
 

@@ -43,12 +43,31 @@ pub struct Root {
     pub kind: RootKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ThemePref {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemePref {
+    pub fn next(self) -> Self {
+        match self {
+            ThemePref::System => ThemePref::Light,
+            ThemePref::Light => ThemePref::Dark,
+            ThemePref::Dark => ThemePref::System,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(from = "WorkspaceFile")]
 pub struct Workspace {
     pub roots: Vec<Root>,
     pub scan_depth: u8,
-    pub dark: bool,
+    pub theme: ThemePref,
+    pub sidebar_collapsed: bool,
 }
 
 impl Default for Workspace {
@@ -56,7 +75,48 @@ impl Default for Workspace {
         Workspace {
             roots: Vec::new(),
             scan_depth: DEFAULT_SCAN_DEPTH,
-            dark: false,
+            theme: ThemePref::default(),
+            sidebar_collapsed: false,
+        }
+    }
+}
+
+/// On-disk shape; carries the pre-`theme` `dark` flag so old configs keep their look.
+#[derive(Deserialize)]
+#[serde(default)]
+struct WorkspaceFile {
+    roots: Vec<Root>,
+    scan_depth: u8,
+    theme: Option<ThemePref>,
+    dark: Option<bool>,
+    sidebar_collapsed: bool,
+}
+
+impl Default for WorkspaceFile {
+    fn default() -> Self {
+        let ws = Workspace::default();
+        WorkspaceFile {
+            roots: ws.roots,
+            scan_depth: ws.scan_depth,
+            theme: None,
+            dark: None,
+            sidebar_collapsed: ws.sidebar_collapsed,
+        }
+    }
+}
+
+impl From<WorkspaceFile> for Workspace {
+    fn from(f: WorkspaceFile) -> Self {
+        let theme = match (f.theme, f.dark) {
+            (Some(theme), _) => theme,
+            (None, Some(true)) => ThemePref::Dark,
+            (None, _) => ThemePref::System,
+        };
+        Workspace {
+            roots: f.roots,
+            scan_depth: f.scan_depth,
+            theme,
+            sidebar_collapsed: f.sidebar_collapsed,
         }
     }
 }
@@ -272,7 +332,7 @@ mod tests {
                 kind: RootKind::Scan,
             }],
             scan_depth: depth,
-            dark: false,
+            ..Workspace::default()
         }
     }
 
@@ -436,7 +496,8 @@ mod tests {
                 },
             ],
             scan_depth: 2,
-            dark: true,
+            theme: ThemePref::Dark,
+            sidebar_collapsed: true,
         };
         ws.save_to(&path).unwrap();
         assert_eq!(Workspace::load_from(&path).unwrap(), ws);
@@ -450,12 +511,44 @@ mod tests {
         let path = tmp.path().join("workspace.json");
         fs::write(&path, r#"{"dark": true}"#).unwrap();
         let ws = Workspace::load_from(&path).unwrap();
-        assert!(ws.dark);
+        assert_eq!(ws.theme, ThemePref::Dark);
         assert_eq!(ws.scan_depth, 4);
         fs::write(&path, "{nope").unwrap();
         assert!(matches!(
             Workspace::load_from(&path),
             Err(ConfigError::Parse(_))
         ));
+    }
+
+    #[test]
+    fn theme_defaults_to_system_and_legacy_dark_maps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("workspace.json");
+        assert_eq!(
+            Workspace::load_from(&path).unwrap().theme,
+            ThemePref::System
+        );
+        fs::write(&path, r#"{"dark": false}"#).unwrap();
+        assert_eq!(
+            Workspace::load_from(&path).unwrap().theme,
+            ThemePref::System
+        );
+        fs::write(&path, r#"{"dark": true}"#).unwrap();
+        assert_eq!(Workspace::load_from(&path).unwrap().theme, ThemePref::Dark);
+        fs::write(&path, r#"{"dark": true, "theme": "Light"}"#).unwrap();
+        assert_eq!(Workspace::load_from(&path).unwrap().theme, ThemePref::Light);
+    }
+
+    #[test]
+    fn sidebar_collapsed_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("workspace.json");
+        assert!(!Workspace::load_from(&path).unwrap().sidebar_collapsed);
+        let ws = Workspace {
+            sidebar_collapsed: true,
+            ..Workspace::default()
+        };
+        ws.save_to(&path).unwrap();
+        assert!(Workspace::load_from(&path).unwrap().sidebar_collapsed);
     }
 }

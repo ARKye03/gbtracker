@@ -375,6 +375,18 @@ pub fn subtle(theme: &Theme) -> text::Style {
     }
 }
 
+pub fn faded(alpha: f32) -> impl Fn(&Theme) -> text::Style {
+    move |theme| text::Style {
+        color: Some(Tokens::of(theme).text.scale_alpha(alpha)),
+    }
+}
+
+pub fn faded_subtle(alpha: f32) -> impl Fn(&Theme) -> text::Style {
+    move |theme| text::Style {
+        color: Some(Tokens::of(theme).text_subtle.scale_alpha(alpha)),
+    }
+}
+
 pub fn tone_text(tone: Tone, soft: bool) -> impl Fn(&Theme) -> text::Style {
     move |theme| {
         let (strong, light, _) = Tokens::of(theme).tone(tone);

@@ -12,9 +12,12 @@ use gbtracker::done::{self, EpicCandidate, Report};
 use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{self, Filter, StateFilter, StatusFilter};
 use gbtracker::gitbug::{self, GitBugError, Issue, IssueDetail, Kind, Status, WriteOp};
-use gbtracker::workspace::{self, RepoInfo, Root, RootKind, Workspace};
+use gbtracker::workspace::{self, RepoInfo, Root, RootKind, ThemePref, Workspace};
 use gbtracker::writes::WriteQueue;
+use iced::animation::{Animation, Easing};
 use iced::keyboard::{self, key::Named};
+use iced::theme::Mode as SystemMode;
+use iced::time::Instant;
 use iced::widget::text_editor;
 use iced::{Element, Subscription, Task, Theme, clipboard, event, time, window};
 use tokio::sync::Semaphore;
@@ -215,7 +218,11 @@ impl DoneSheet {
 }
 
 pub struct App {
-    pub mode: Mode,
+    pub system: SystemMode,
+    theme_override: Option<Mode>,
+    pub sidebar: Animation<bool>,
+    /// Latest frame time; animations are projected at this instant so `view` stays pure.
+    pub now: Instant,
     pub section: Section,
     pub workspace: Workspace,
     pub repos: Vec<RepoEntry>,
@@ -260,6 +267,9 @@ pub struct App {
 #[derive(Debug, Clone)]
 pub enum Message {
     ToggleTheme,
+    SystemTheme(SystemMode),
+    ToggleSidebar,
+    Frame(Instant),
     Navigate(Section),
     Noop,
     ToggleKind(Kind),
@@ -355,13 +365,16 @@ impl App {
             app.notice = Some(format!("{e} — changes will not be saved"));
         }
         if let Ok(theme) = std::env::var("GBTRACKER_THEME") {
-            app.mode = if theme == "dark" {
+            app.theme_override = Some(if theme == "dark" {
                 Mode::Dark
             } else {
                 Mode::Light
-            };
+            });
         }
-        let task = app.start_discovery();
+        let task = Task::batch([
+            app.start_discovery(),
+            iced::system::theme().map(Message::SystemTheme),
+        ]);
         (app, task)
     }
 
@@ -385,11 +398,12 @@ impl App {
             })
             .collect();
         let mut app = App {
-            mode: if workspace.dark {
-                Mode::Dark
-            } else {
-                Mode::Light
-            },
+            system: SystemMode::None,
+            theme_override: None,
+            sidebar: Animation::new(workspace.sidebar_collapsed)
+                .quick()
+                .easing(Easing::EaseInOut),
+            now: Instant::now(),
             section: Section::default(),
             workspace,
             repos,
@@ -510,9 +524,23 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ToggleTheme => {
-                self.mode = self.mode.toggle();
-                self.workspace.dark = self.mode == Mode::Dark;
+                self.workspace.theme = self.workspace.theme.next();
                 self.persist_workspace()
+            }
+            Message::SystemTheme(mode) => {
+                self.system = mode;
+                Task::none()
+            }
+            Message::ToggleSidebar => {
+                let collapsed = !self.workspace.sidebar_collapsed;
+                self.workspace.sidebar_collapsed = collapsed;
+                self.now = Instant::now();
+                self.sidebar.go_mut(collapsed, self.now);
+                self.persist_workspace()
+            }
+            Message::Frame(at) => {
+                self.now = at;
+                Task::none()
             }
             Message::Navigate(section) => {
                 self.section = section;
@@ -1336,12 +1364,31 @@ impl App {
         ui::screen::view(self)
     }
 
+    pub fn mode(&self) -> Mode {
+        if let Some(mode) = self.theme_override {
+            return mode;
+        }
+        match self.workspace.theme {
+            ThemePref::Light => Mode::Light,
+            ThemePref::Dark => Mode::Dark,
+            ThemePref::System => match self.system {
+                SystemMode::Dark => Mode::Dark,
+                _ => Mode::Light,
+            },
+        }
+    }
+
     pub fn theme(&self) -> Theme {
-        self.mode.theme()
+        self.mode().theme()
+    }
+
+    pub fn needs_frames(&self) -> bool {
+        self.sidebar.is_animating(self.now)
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![
+            iced::system::theme_changes().map(Message::SystemTheme),
             time::every(TRACK_EVERY).map(|_| Message::Tick),
             event::listen_with(|event, status, _| match event {
                 event::Event::Window(window::Event::Focused) => Some(Message::Refocused),
@@ -1358,6 +1405,9 @@ impl App {
             .is_some_and(|d| matches!(d.phase, DonePhase::Loading | DonePhase::Closing));
         if self.is_busy() || !self.pending.is_empty() || sheet_busy {
             subs.push(time::every(SPIN_EVERY).map(|_| Message::Spin));
+        }
+        if self.needs_frames() {
+            subs.push(window::frames().map(Message::Frame));
         }
         Subscription::batch(subs)
     }
@@ -1620,23 +1670,64 @@ mod tests {
     }
 
     #[test]
-    fn theme_toggle_updates_workspace_flag() {
+    fn theme_toggle_cycles_system_light_dark() {
         let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
         app.config_locked = true;
+        assert_eq!(app.workspace.theme, ThemePref::System);
         app.send(Message::ToggleTheme);
-        assert!(app.workspace.dark);
+        assert_eq!(app.workspace.theme, ThemePref::Light);
         app.send(Message::ToggleTheme);
-        assert!(!app.workspace.dark);
+        assert_eq!(app.workspace.theme, ThemePref::Dark);
+        app.send(Message::ToggleTheme);
+        assert_eq!(app.workspace.theme, ThemePref::System);
     }
 
     #[test]
     fn workspace_dark_selects_initial_mode() {
         let ws = Workspace {
-            dark: true,
+            theme: ThemePref::Dark,
             ..Workspace::default()
         };
         let app = App::from_parts(ws, Snapshot::default(), None);
-        assert_eq!(app.mode, Mode::Dark);
+        assert_eq!(app.mode(), Mode::Dark);
+    }
+
+    #[test]
+    fn system_pref_follows_os_changes() {
+        let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
+        app.config_locked = true;
+        assert_eq!(app.mode(), Mode::Light);
+        app.send(Message::SystemTheme(SystemMode::Dark));
+        assert_eq!(app.mode(), Mode::Dark);
+        app.send(Message::SystemTheme(SystemMode::Light));
+        assert_eq!(app.mode(), Mode::Light);
+        app.send(Message::SystemTheme(SystemMode::Dark));
+        app.send(Message::ToggleTheme);
+        assert_eq!(app.mode(), Mode::Light);
+    }
+
+    #[test]
+    fn sidebar_toggle_animates_then_stops_asking_for_frames() {
+        let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
+        app.config_locked = true;
+        assert!(!app.needs_frames());
+        app.send(Message::ToggleSidebar);
+        assert!(app.workspace.sidebar_collapsed);
+        assert!(app.needs_frames());
+        app.send(Message::Frame(Instant::now() + Duration::from_secs(1)));
+        assert!(!app.needs_frames());
+        assert_eq!(app.sidebar.interpolate(276.0, 64.0, app.now), 64.0);
+    }
+
+    #[test]
+    fn collapsed_workspace_boots_collapsed_without_animating() {
+        let ws = Workspace {
+            sidebar_collapsed: true,
+            ..Workspace::default()
+        };
+        let app = App::from_parts(ws, Snapshot::default(), None);
+        assert!(!app.needs_frames());
+        assert_eq!(app.sidebar.interpolate(276.0, 64.0, app.now), 64.0);
     }
 
     fn titled(title: &str, status: Status) -> Issue {

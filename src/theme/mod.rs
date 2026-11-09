@@ -11,13 +11,6 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub fn toggle(self) -> Self {
-        match self {
-            Mode::Light => Mode::Dark,
-            Mode::Dark => Mode::Light,
-        }
-    }
-
     pub fn theme(self) -> Theme {
         let t = Tokens::for_mode(self);
         let name = match self {
