@@ -1,6 +1,6 @@
 # gbtracker UI design
 
-Desktop app (Rust, iced 0.14) that wraps directories using git-bug. Visual target: `docs/proposal.jpg`. Repositories, Issues, Epics and Overview read real git-bug data; the other sections are placeholders.
+Desktop app (Rust, iced 0.14) that wraps directories using git-bug. Visual target: `docs/proposal.jpg`. Repositories, Issues, Epics and Overview read real git-bug data.
 
 ## Run
 
@@ -31,7 +31,7 @@ GBTRACKER_THEME=dark cargo run    # force dark for this run
 - Selected state is never just a surface change. Chips and the active top pill use `chip_selected`: `accent_soft` fill, 1px `accent` border, `accent` text (≥3:1 against the panel, unit-tested for both palettes). Unselected chips are transparent with a 1px `border` and `text_muted`. Multi-select groups (Kind) add a leading check. The active sidebar item adds a 3px accent bar.
 - Card pages use `components::card_grid`: columns = `(w + gap) / (min_width + gap)`, cards are `Fill` width, the last row is padded to stay aligned. No fixed-width cards.
 - Shadows are a single soft 1px/6 blur, only on raised white surfaces.
-- Type scale: 29 for card headline numbers, 21 for page and sidebar titles, 18 for card titles, 15 for controls, 14 for body text, 13 for meta, chips and percentages.
+- Type scale: 29 for card headline numbers, 21 for page titles, 18 for card titles, 15 for controls, 14 for body text, 13 for meta, chips and percentages.
 
 ## How the proposal maps to git-bug
 
