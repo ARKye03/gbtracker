@@ -4,20 +4,15 @@ use iced::advanced::widget::{self, Tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, overlay, renderer};
 use iced::widget::{
     button, column, container, mouse_area, opaque, row, scrollable, space, stack, text,
-    text::Wrapping,
 };
 use iced::{
     Alignment, Element, Event, Fill, Length, Padding, Point, Rectangle, Renderer, Size, Theme,
     Vector, mouse,
 };
-use lucide_iced::icon as lu;
 
-use super::components::{MEDIUM, dot, icon, icon_muted};
-use super::screen::{status_indicator, status_label};
-use crate::app::{App, LoadState, Message, Notification, Popover, ago};
-use crate::keymap::{self, Action};
+use super::components::{MEDIUM, dot};
+use crate::app::{App, Message, Notification, Popover, ago};
 use crate::theme::style;
-use gbtracker::workspace::{RootKind, ThemePref};
 
 const GAP: f32 = 8.0;
 const EDGE: f32 = 8.0;
@@ -26,6 +21,7 @@ const NOTE_CLIP: usize = 200;
 /// Which edge of the trigger the panel lines up with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
+    #[cfg_attr(not(test), allow(dead_code))]
     Start,
     End,
 }
@@ -60,177 +56,12 @@ pub fn anchored<'a>(
 
 fn panel<'a>(app: &'a App, which: Popover) -> Element<'a, Message> {
     let (width, body) = match which {
-        Popover::Repos => (320.0, repos(app)),
-        Popover::Overflow => (300.0, overflow(app)),
         Popover::Notifications => (380.0, notifications(app)),
-        Popover::Identity => (300.0, identity(app)),
     };
     container(scrollable(body).style(style::scroll))
         .padding(8)
         .width(width)
         .style(style::popover)
-        .into()
-}
-
-fn heading<'a>(label: &'a str) -> Element<'a, Message> {
-    container(text(label).size(13).style(style::subtle))
-        .padding([6, 12])
-        .into()
-}
-
-fn rule<'a>() -> Element<'a, Message> {
-    container(
-        container(space())
-            .width(Fill)
-            .height(1)
-            .style(style::divider),
-    )
-    .padding([6, 4])
-    .into()
-}
-
-fn item<'a>(
-    content: impl Into<Element<'a, Message>>,
-    selected: bool,
-    on_press: Option<Message>,
-) -> Element<'a, Message> {
-    button(content)
-        .width(Fill)
-        .padding([9, 12])
-        .style(style::menu_item(selected))
-        .on_press_maybe(on_press)
-        .into()
-}
-
-fn action<'a>(
-    glyph: iced::widget::Svg<'static>,
-    label: impl text::IntoFragment<'a>,
-    hint: Option<String>,
-    on_press: Option<Message>,
-) -> Element<'a, Message> {
-    let glyph: Element<'a, Message> = icon(glyph, 16.0).into();
-    let mut line = row![glyph, text(label).size(14)]
-        .spacing(12)
-        .align_y(Alignment::Center);
-    if let Some(hint) = hint {
-        line = line
-            .push(space::horizontal())
-            .push(text(hint).size(13).style(style::subtle));
-    }
-    item(line, false, on_press)
-}
-
-fn repos(app: &App) -> Element<'_, Message> {
-    let open: usize = app.repos.iter().map(|e| e.open_count()).sum();
-    let mut list = column![item(
-        row![
-            icon(lu::layers(), 16.0),
-            text("All repositories").size(14),
-            space::horizontal(),
-            text!("{open} open").size(13).style(style::subtle),
-        ]
-        .spacing(12)
-        .align_y(Alignment::Center),
-        app.filter.repos.is_empty(),
-        Some(Message::ChooseRepo(None)),
-    )]
-    .spacing(2);
-
-    for entry in &app.repos {
-        let trailing = match &entry.state {
-            LoadState::Error(_) | LoadState::NoGitBug | LoadState::Locked => {
-                status_label(&entry.state).0.to_owned()
-            }
-            _ if entry.fingerprint.is_some() => format!("{} open", entry.open_count()),
-            state => status_label(state).0.to_owned(),
-        };
-        let line = row![
-            status_indicator(&entry.state, app.spin),
-            text(entry.info.name.as_str())
-                .size(14)
-                .wrapping(Wrapping::None),
-            space::horizontal(),
-            text(trailing).size(13).style(style::subtle),
-        ]
-        .spacing(12)
-        .align_y(Alignment::Center);
-        list = list.push(item(
-            line,
-            app.filter.repos.contains(&entry.info.root),
-            entry
-                .info
-                .has_git_bug
-                .then(|| Message::ChooseRepo(Some(entry.info.root.clone()))),
-        ));
-    }
-    if app.repos.is_empty() {
-        list = list.push(
-            container(
-                text("No repositories found yet.")
-                    .size(14)
-                    .style(style::muted),
-            )
-            .padding([10, 12]),
-        );
-    }
-    list.into()
-}
-
-fn overflow(app: &App) -> Element<'_, Message> {
-    let mut list = column![
-        action(
-            lu::refresh_cw(),
-            "Rescan",
-            keymap::hint(Action::Rescan),
-            Some(Message::Rescan)
-        ),
-        action(
-            lu::plus(),
-            "Add project",
-            None,
-            Some(Message::PickFolder(RootKind::Project))
-        ),
-        action(
-            lu::folder_plus(),
-            "Add folder to scan",
-            None,
-            Some(Message::PickFolder(RootKind::Scan))
-        ),
-        rule(),
-        heading("Check Done"),
-    ]
-    .spacing(2);
-
-    let tracked: Vec<_> = app.repos.iter().filter(|e| e.info.has_git_bug).collect();
-    if tracked.is_empty() {
-        list = list.push(
-            container(
-                text("No repositories with git-bug.")
-                    .size(14)
-                    .style(style::muted),
-            )
-            .padding([6, 12]),
-        );
-    }
-    for entry in tracked {
-        list = list.push(action(
-            lu::circle_check(),
-            entry.info.name.as_str(),
-            None,
-            entry
-                .fingerprint
-                .is_some()
-                .then(|| Message::OpenDone(entry.info.root.clone())),
-        ));
-    }
-
-    list.push(rule())
-        .push(action(
-            lu::keyboard(),
-            "Keyboard shortcuts",
-            keymap::hint(Action::Help),
-            Some(Message::ToggleHelp),
-        ))
         .into()
 }
 
@@ -289,53 +120,6 @@ fn clip(text: &str) -> String {
     }
     let head: String = text.chars().take(NOTE_CLIP).collect();
     format!("{head}…")
-}
-
-fn identity(app: &App) -> Element<'_, Message> {
-    let (name, email) = match &app.identity {
-        Some(who) if !who.email.is_empty() => (who.name.as_str(), who.email.as_str()),
-        Some(who) => (who.name.as_str(), "No email set"),
-        None => ("Unknown identity", "git-bug has not reported one yet"),
-    };
-    let who = row![
-        container(text(app.initials.as_str()).size(15).font(MEDIUM))
-            .center(44)
-            .style(style::avatar),
-        column![
-            text(name).size(15).font(MEDIUM),
-            text(email).size(13).style(style::muted)
-        ]
-        .spacing(2),
-    ]
-    .spacing(12)
-    .align_y(Alignment::Center);
-
-    let themes = [
-        (ThemePref::System, lu::monitor(), "System"),
-        (ThemePref::Light, lu::sun(), "Light"),
-        (ThemePref::Dark, lu::moon(), "Dark"),
-    ]
-    .into_iter()
-    .map(|(pref, glyph, label)| {
-        let selected = app.workspace.theme == pref;
-        let mut line = row![icon_muted(glyph, 16.0), text(label).size(14)]
-            .spacing(12)
-            .align_y(Alignment::Center);
-        if selected {
-            line = line
-                .push(space::horizontal())
-                .push(lu::check().width(14).height(14).style(style::icon_accent));
-        }
-        item(line, selected, Some(Message::SetTheme(pref)))
-    });
-
-    column![
-        container(who).padding([8, 12]),
-        rule(),
-        heading("Theme"),
-        column(themes).spacing(2),
-    ]
-    .into()
 }
 
 struct Anchored<'a> {

@@ -104,54 +104,11 @@ fn top_bar(app: &App) -> Element<'_, Message> {
             "New issue"
         )
         .shortcut_maybe(keymap::hint(Action::NewIssue)),
-        vdivider(),
-        top_pill(
-            labeled(lu::folder_git_2(), "Repositories"),
-            app.section == Section::Repositories,
-            Message::Navigate(Section::Repositories)
-        ),
-        popover::anchored(
-            app,
-            Popover::Repos,
-            Align::Start,
-            top_pill(
-                row![
-                    icon(lu::git_branch(), 16.0),
-                    text(workspace_summary(app)).size(15)
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-                app.open_popover == Some(Popover::Repos),
-                Message::TogglePopover(Popover::Repos)
-            )
-        ),
-        popover::anchored(
-            app,
-            Popover::Overflow,
-            Align::Start,
-            icon_pill(
-                lu::ellipsis(),
-                "More",
-                Message::TogglePopover(Popover::Overflow)
-            )
-        ),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
 
     let sync = sync_pill(app);
-
-    let avatar = tip(
-        button(
-            container(text(app.initials.as_str()).size(13).font(MEDIUM))
-                .center(32)
-                .style(style::avatar),
-        )
-        .padding(4)
-        .style(style::list_item)
-        .on_press(Message::TogglePopover(Popover::Identity)),
-        "Account",
-    );
 
     let bell = icon_pill(
         lu::bell(),
@@ -185,7 +142,6 @@ fn top_bar(app: &App) -> Element<'_, Message> {
             Message::ToggleTheme
         ),
         popover::anchored(app, Popover::Notifications, Align::End, bell),
-        popover::anchored(app, Popover::Identity, Align::End, avatar),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -205,10 +161,6 @@ fn unread_badge(count: usize) -> Element<'static, Message> {
         .padding([1, 5])
         .style(style::badge)
         .into()
-}
-
-fn workspace_summary(app: &App) -> String {
-    format!("{} repositories", app.repos.len())
 }
 
 fn sync_pill(app: &App) -> Element<'_, Message> {

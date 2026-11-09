@@ -12,7 +12,7 @@ use gbtracker::done::{self, EpicCandidate, Report};
 use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{self, Filter, StateFilter, StatusFilter};
 use gbtracker::gitbug::{
-    self, GitBugError, Identity, Issue, IssueDetail, Kind, NewIssue, NewKind, Status, WriteOp,
+    self, GitBugError, Issue, IssueDetail, Kind, NewIssue, NewKind, Status, WriteOp,
 };
 use gbtracker::workspace::{self, RepoInfo, Root, RootKind, ThemePref, Workspace};
 use gbtracker::writes::WriteQueue;
@@ -254,10 +254,7 @@ impl NewIssueForm {
 /// The top-bar popover that is open; at most one at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Popover {
-    Repos,
-    Overflow,
     Notifications,
-    Identity,
 }
 
 #[derive(Debug, Clone)]
@@ -306,9 +303,6 @@ pub struct App {
     pub done: Option<DoneSheet>,
     done_seq: u64,
     pub new_issue: Option<NewIssueForm>,
-    pub initials: String,
-    pub identity: Option<Identity>,
-    identity_asked: bool,
     pub open_popover: Option<Popover>,
     /// Oldest first, capped at `MAX_NOTIFICATIONS`.
     pub notifications: Vec<Notification>,
@@ -419,10 +413,8 @@ pub enum Message {
         root: PathBuf,
         result: Result<Box<IssueDetail>, CreateFailure>,
     },
-    Identified(Option<Identity>),
     TogglePopover(Popover),
     ClosePopover,
-    ChooseRepo(Option<PathBuf>),
     SetTheme(ThemePref),
     ClearNotifications,
     ClearFilters,
@@ -530,9 +522,6 @@ impl App {
             done: None,
             done_seq: 0,
             new_issue: None,
-            initials: "?".to_owned(),
-            identity: None,
-            identity_asked: false,
             open_popover: None,
             notifications: Vec::new(),
             unread: 0,
@@ -643,7 +632,6 @@ impl App {
                 | Message::OpenDone(_)
                 | Message::Rescan
                 | Message::PickFolder(_)
-                | Message::ChooseRepo(_)
                 | Message::OpenNewIssue(_)
         ) {
             self.open_popover = None;
@@ -671,11 +659,6 @@ impl App {
             }
             Message::ClosePopover => {
                 self.open_popover = None;
-                Task::none()
-            }
-            Message::ChooseRepo(root) => {
-                self.pick_repo(root);
-                self.section = Section::Issues;
                 Task::none()
             }
             Message::ClearNotifications => {
@@ -957,16 +940,6 @@ impl App {
             }
             Message::SubmitNewIssue => self.submit_new_issue(),
             Message::IssueCreated { root, result } => self.on_created(root, result),
-            Message::Identified(identity) => {
-                match identity {
-                    Some(identity) => {
-                        self.initials = gitbug::initials(&identity.name);
-                        self.identity = Some(identity);
-                    }
-                    None => self.identity_asked = false,
-                }
-                Task::none()
-            }
             Message::ClearFilters => {
                 self.filter = Filter::default();
                 self.search.clear();
@@ -1775,14 +1748,6 @@ impl App {
                 done: 0,
                 visible: true,
             });
-            if !self.identity_asked {
-                self.identity_asked = true;
-                let root = roots[0].clone();
-                tasks.push(Task::perform(
-                    async move { gitbug::current_identity(&root).await.ok() },
-                    Message::Identified,
-                ));
-            }
             tasks.extend(roots.into_iter().map(|r| self.fingerprint_task(r)));
         }
         Task::batch(tasks)
@@ -2138,7 +2103,6 @@ mod tests {
         let mut app = App::from_parts(Workspace::default(), snapshot(names), None);
         app.discovering = true;
         app.epoch = 1;
-        app.identity_asked = true;
         let task = app.update(Message::Discovered {
             epoch: 1,
             repos: names.iter().map(|n| info(n)).collect(),
@@ -2766,26 +2730,6 @@ mod tests {
         assert!(app.drafts[&key()].text().trim().is_empty());
     }
 
-    #[test]
-    fn identity_sets_initials_and_failure_allows_a_retry() {
-        let mut app = booted(&["a"]);
-        assert_eq!(app.initials, "?");
-        app.send(Message::Identified(Some(ada())));
-        assert_eq!(app.initials, "AL");
-        assert_eq!(app.identity, Some(ada()));
-        app.send(Message::Identified(None));
-        assert_eq!(app.initials, "AL", "a failed lookup keeps the last name");
-        assert_eq!(app.identity, Some(ada()));
-        assert!(!app.identity_asked);
-    }
-
-    fn ada() -> Identity {
-        Identity {
-            name: "Ada Lovelace".into(),
-            email: "ada@example.com".into(),
-        }
-    }
-
     fn fail_close(app: &mut App) {
         let _ = app.update(write(WriteOp::Close));
         app.send(Message::WriteDone {
@@ -2928,46 +2872,19 @@ mod tests {
     }
 
     #[test]
-    fn choosing_a_repo_filters_the_issues_page_and_closes_the_switcher() {
-        let mut app = booted(&["a", "b"]);
-        app.send(Message::TogglePopover(Popover::Repos));
-        assert_eq!(app.section, Section::Repositories);
-
-        app.send(Message::ChooseRepo(Some(info("b").root)));
-        assert_eq!(app.section, Section::Issues);
-        assert_eq!(app.filter.repos.len(), 1);
-        assert!(app.filter.repos.contains(&info("b").root));
-        assert_eq!(app.open_popover, None);
-
-        app.section = Section::Overview;
-        app.send(Message::ChooseRepo(None));
-        assert_eq!(app.section, Section::Issues);
-        assert!(app.filter.repos.is_empty());
-    }
-
-    #[test]
-    fn every_popover_builds_a_view() {
+    fn notifications_popover_builds_a_view() {
         let mut app = loaded(&[("one", Status::Open)]);
-        app.identity = Some(ada());
         fail_close(&mut app);
-        for popover in [
-            Popover::Repos,
-            Popover::Overflow,
-            Popover::Notifications,
-            Popover::Identity,
-        ] {
-            app.open_popover = Some(popover);
-            let _ = app.view();
-        }
+        app.open_popover = Some(Popover::Notifications);
+        let _ = app.view();
     }
 
     #[test]
-    fn only_one_popover_is_open_and_escape_closes_it_before_the_pane() {
+    fn escape_closes_the_popover_before_the_pane() {
         let mut app = numbered(2);
         enter(&mut app);
-        app.send(Message::TogglePopover(Popover::Overflow));
-        app.send(Message::TogglePopover(Popover::Identity));
-        assert_eq!(app.open_popover, Some(Popover::Identity));
+        app.send(Message::TogglePopover(Popover::Notifications));
+        assert_eq!(app.open_popover, Some(Popover::Notifications));
         escape(&mut app, false);
         assert_eq!(app.open_popover, None);
         assert!(app.detail.is_some());
@@ -2985,23 +2902,17 @@ mod tests {
             Message::Navigate(Section::Epics),
             Message::OpenDone(info("a").root),
         ] {
-            app.send(Message::TogglePopover(Popover::Overflow));
-            assert_eq!(app.open_popover, Some(Popover::Overflow));
+            app.send(Message::TogglePopover(Popover::Notifications));
+            assert_eq!(app.open_popover, Some(Popover::Notifications));
             app.send(message);
             assert_eq!(app.open_popover, None);
         }
-        app.send(Message::TogglePopover(Popover::Identity));
         app.send(Message::SetTheme(ThemePref::Dark));
         assert_eq!(app.workspace.theme, ThemePref::Dark);
-        assert_eq!(
-            app.open_popover,
-            Some(Popover::Identity),
-            "stays for more picks"
-        );
     }
 
     #[test]
-    fn discovery_asks_for_the_identity_once() {
+    fn discovery_queues_one_fingerprint_per_repo() {
         let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
         app.discovering = true;
         app.epoch = 1;
@@ -3010,7 +2921,7 @@ mod tests {
             epoch: 1,
             repos: repos.clone(),
         });
-        assert_eq!(first.units(), 3, "identity + one fingerprint per repo");
+        assert_eq!(first.units(), 2, "one fingerprint per repo");
         app.discovering = true;
         app.epoch = 2;
         let second = app.update(Message::Discovered { epoch: 2, repos });

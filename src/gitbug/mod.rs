@@ -283,36 +283,6 @@ pub async fn show(root: &Path, full_id: &str) -> Result<IssueDetail, GitBugError
     Ok(detail)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Identity {
-    pub name: String,
-    pub email: String,
-}
-
-pub async fn current_identity(root: &Path) -> Result<Identity, GitBugError> {
-    let name = cli::run(root, &["user", "show", "--field", "name"]).await?;
-    let email = cli::run(root, &["user", "show", "--field", "email"]).await?;
-    Ok(Identity {
-        name: name.trim().to_owned(),
-        email: email.trim().to_owned(),
-    })
-}
-
-/// Up to two letters: first letters of the first two words, or the first two letters of a single word.
-pub fn initials(name: &str) -> String {
-    let mut words = name.split_whitespace();
-    let letters: String = match (words.next(), words.next()) {
-        (Some(a), Some(b)) => a.chars().take(1).chain(b.chars().take(1)).collect(),
-        (Some(a), None) => a.chars().take(2).collect(),
-        _ => String::new(),
-    };
-    if letters.is_empty() {
-        "?".to_owned()
-    } else {
-        letters.to_uppercase()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -355,16 +325,6 @@ mod tests {
         rows[0]["labels"] = serde_json::Value::Null;
         let issues = parse_list(&rows.to_string()).unwrap();
         assert!(issues.iter().any(|i| i.labels.is_empty()));
-    }
-
-    #[test]
-    fn initials_from_name() {
-        assert_eq!(initials("Ada Lovelace"), "AL");
-        assert_eq!(initials("  ada   king lovelace "), "AK");
-        assert_eq!(initials("ARKye03"), "AR");
-        assert_eq!(initials("x"), "X");
-        assert_eq!(initials(""), "?");
-        assert_eq!(initials("  \n"), "?");
     }
 
     #[test]

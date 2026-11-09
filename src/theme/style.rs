@@ -150,16 +150,6 @@ pub fn divider(theme: &Theme) -> container::Style {
     }
 }
 
-pub fn avatar(theme: &Theme) -> container::Style {
-    let t = Tokens::of(theme);
-    container::Style {
-        background: Some(t.accent.into()),
-        text_color: Some(t.on_accent),
-        border: border::rounded(radius::PILL),
-        ..container::Style::default()
-    }
-}
-
 pub fn status_dot(tone: Tone) -> impl Fn(&Theme) -> container::Style {
     move |theme| {
         let (c, _, _) = Tokens::of(theme).tone(tone);
@@ -365,28 +355,6 @@ pub fn card_button(selected: bool) -> impl Fn(&Theme, button::Status) -> button:
             shadow: soft_shadow(&t),
             ..filled(bg, t.text, radius::XL)
         }
-    }
-}
-
-/// Popover menu row; the current choice gets a tinted fill.
-pub fn menu_item(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |theme, status| {
-        let t = Tokens::of(theme);
-        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        let (bg, fg) = match (selected, hovered) {
-            (true, _) => (Some(t.accent_soft), t.accent),
-            (false, true) => (Some(t.fill.scale_alpha(0.5)), t.text),
-            (false, false) => (None, t.text),
-        };
-        dimmed(
-            button::Style {
-                background: bg.map(Background::Color),
-                text_color: fg,
-                border: border::rounded(radius::MD),
-                ..button::Style::default()
-            },
-            status,
-        )
     }
 }
 
