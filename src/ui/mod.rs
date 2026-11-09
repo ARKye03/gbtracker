@@ -1,6 +1,7 @@
 pub mod components;
 pub mod detail;
 pub mod done;
+pub mod new_issue;
 pub mod popover;
 pub mod screen;
 pub mod shortcuts;

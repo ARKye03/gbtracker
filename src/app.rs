@@ -11,7 +11,9 @@ use gbtracker::detail::{DetailCache, LoadedDetail};
 use gbtracker::done::{self, EpicCandidate, Report};
 use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{self, Filter, StateFilter, StatusFilter};
-use gbtracker::gitbug::{self, GitBugError, Identity, Issue, IssueDetail, Kind, Status, WriteOp};
+use gbtracker::gitbug::{
+    self, GitBugError, Identity, Issue, IssueDetail, Kind, NewIssue, NewKind, Status, WriteOp,
+};
 use gbtracker::workspace::{self, RepoInfo, Root, RootKind, ThemePref, Workspace};
 use gbtracker::writes::WriteQueue;
 use iced::animation::{Animation, Easing};
@@ -35,6 +37,7 @@ const SEARCH_DEBOUNCE: Duration = Duration::from_millis(150);
 pub const PAGE_SIZE: usize = 200;
 pub const SEARCH_ID: &str = "issue-search";
 pub const LIST_ID: &str = "issue-list";
+pub const NEW_ISSUE_TITLE_ID: &str = "new-issue-title";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadState {
@@ -222,6 +225,32 @@ impl DoneSheet {
     }
 }
 
+/// The New issue dialog. Locked while a create is in flight so the submitted text and repo stay what was sent.
+pub struct NewIssueForm {
+    pub root: PathBuf,
+    pub kind: NewKind,
+    pub title: String,
+    pub body: text_editor::Content,
+    /// Full id of the parent epic.
+    pub epic: Option<String>,
+    pub submitting: bool,
+    pub error: Option<String>,
+}
+
+impl NewIssueForm {
+    fn new(root: PathBuf, kind: NewKind) -> Self {
+        NewIssueForm {
+            root,
+            kind,
+            title: String::new(),
+            body: text_editor::Content::new(),
+            epic: None,
+            submitting: false,
+            error: None,
+        }
+    }
+}
+
 /// The top-bar popover that is open; at most one at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Popover {
@@ -276,6 +305,7 @@ pub struct App {
     writes: WriteQueue,
     pub done: Option<DoneSheet>,
     done_seq: u64,
+    pub new_issue: Option<NewIssueForm>,
     pub initials: String,
     pub identity: Option<Identity>,
     identity_asked: bool,
@@ -362,6 +392,18 @@ pub enum Message {
     PickDone(bool),
     RunDone,
     DismissDone,
+    OpenNewIssue(NewKind),
+    DismissNewIssue,
+    NewIssueRepo(PathBuf),
+    NewIssueKind(NewKind),
+    NewIssueTitle(String),
+    NewIssueBody(text_editor::Action),
+    NewIssueEpic(Option<String>),
+    SubmitNewIssue,
+    IssueCreated {
+        root: PathBuf,
+        result: Result<Box<IssueDetail>, String>,
+    },
     Identified(Option<Identity>),
     TogglePopover(Popover),
     ClosePopover,
@@ -472,6 +514,7 @@ impl App {
             writes: WriteQueue::default(),
             done: None,
             done_seq: 0,
+            new_issue: None,
             initials: "?".to_owned(),
             identity: None,
             identity_asked: false,
@@ -586,6 +629,7 @@ impl App {
                 | Message::Rescan
                 | Message::PickFolder(_)
                 | Message::ChooseRepo(_)
+                | Message::OpenNewIssue(_)
         ) {
             self.open_popover = None;
         }
@@ -652,7 +696,7 @@ impl App {
                 let ctx = Context {
                     typing,
                     section: self.section,
-                    modal_open: self.help || self.done.is_some(),
+                    modal_open: self.help || self.done.is_some() || self.new_issue.is_some(),
                 };
                 match keymap::resolve(&key, modifiers, ctx) {
                     Some(action) => self.perform(action),
@@ -756,6 +800,12 @@ impl App {
                 if self.open_popover.take().is_some() {
                     return Task::none();
                 }
+                if let Some(form) = &self.new_issue {
+                    if !form.submitting {
+                        self.new_issue = None;
+                    }
+                    return Task::none();
+                }
                 match &self.done {
                     Some(sheet) if sheet.can_dismiss() => self.done = None,
                     Some(_) => {}
@@ -850,6 +900,48 @@ impl App {
                 }
                 Task::none()
             }
+            Message::OpenNewIssue(kind) => self.open_new_issue(kind),
+            Message::DismissNewIssue => {
+                if self.new_issue.as_ref().is_some_and(|f| !f.submitting) {
+                    self.new_issue = None;
+                }
+                Task::none()
+            }
+            Message::NewIssueRepo(root) => {
+                if let Some(form) = self.editable_form()
+                    && form.root != root
+                {
+                    form.root = root;
+                    form.epic = None;
+                }
+                Task::none()
+            }
+            Message::NewIssueKind(kind) => {
+                if let Some(form) = self.editable_form() {
+                    form.kind = kind;
+                }
+                Task::none()
+            }
+            Message::NewIssueTitle(title) => {
+                if let Some(form) = self.editable_form() {
+                    form.title = title;
+                }
+                Task::none()
+            }
+            Message::NewIssueBody(action) => {
+                if let Some(form) = self.editable_form() {
+                    form.body.perform(action);
+                }
+                Task::none()
+            }
+            Message::NewIssueEpic(epic) => {
+                if let Some(form) = self.editable_form() {
+                    form.epic = epic;
+                }
+                Task::none()
+            }
+            Message::SubmitNewIssue => self.submit_new_issue(),
+            Message::IssueCreated { root, result } => self.on_created(root, result),
             Message::Identified(identity) => {
                 match identity {
                     Some(identity) => {
@@ -999,6 +1091,7 @@ impl App {
             Action::FocusSearch => self.update(Message::FocusSearch),
             Action::CycleTheme => self.update(Message::ToggleTheme),
             Action::Rescan => self.update(Message::Rescan),
+            Action::NewIssue => self.update(Message::OpenNewIssue(NewKind::Bug)),
             Action::Next => self.move_cursor(1),
             Action::Previous => self.move_cursor(-1),
             Action::Open => self.open_cursor(),
@@ -1032,24 +1125,182 @@ impl App {
             Some(at) => at.saturating_add_signed(step).min(last),
             None => 0,
         };
-        while next >= self.shown {
-            self.shown += PAGE_SIZE;
-        }
+        let scroll = self.scroll_to(next);
         let (root, issue) = self.row_target(next);
         self.cursor = Some((root.clone(), issue.id.clone()));
-        // Rows are uniform, so a proportional offset keeps row `next` fully in view.
-        let visible = self.rows.len().min(self.shown);
-        let y = if visible > 1 {
-            next as f32 / (visible - 1) as f32
-        } else {
-            0.0
-        };
-        let scroll = operation::snap_to(LIST_ID, RelativeOffset { x: 0.0, y });
         if self.detail.is_some() {
             Task::batch([scroll, self.open_detail(root, issue)])
         } else {
             scroll
         }
+    }
+
+    fn scroll_to(&mut self, index: usize) -> Task<Message> {
+        while index >= self.shown {
+            self.shown += PAGE_SIZE;
+        }
+        // Rows are uniform, so a proportional offset keeps the row fully in view.
+        let visible = self.rows.len().min(self.shown);
+        let y = if visible > 1 {
+            index as f32 / (visible - 1) as f32
+        } else {
+            0.0
+        };
+        operation::snap_to(LIST_ID, RelativeOffset { x: 0.0, y })
+    }
+
+    fn editable_form(&mut self) -> Option<&mut NewIssueForm> {
+        self.new_issue.as_mut().filter(|f| !f.submitting)
+    }
+
+    /// Defaults to the repo the list is filtered to, else the first one git-bug can write to.
+    fn open_new_issue(&mut self, kind: NewKind) -> Task<Message> {
+        if self.new_issue.is_some() {
+            return Task::none();
+        }
+        let usable = |e: &&RepoEntry| e.info.has_git_bug;
+        let filtered = self
+            .filter
+            .repos
+            .iter()
+            .find(|r| self.repos.iter().filter(usable).any(|e| e.info.root == **r))
+            .cloned();
+        let root = filtered.or_else(|| self.repos.iter().find(usable).map(|e| e.info.root.clone()));
+        let Some(root) = root else {
+            self.notify(
+                Tone::Warning,
+                "No repository to file an issue in",
+                Some("Add a folder that holds a git-bug repository first.".to_owned()),
+            );
+            return Task::none();
+        };
+        self.new_issue = Some(NewIssueForm::new(root, kind));
+        operation::focus(NEW_ISSUE_TITLE_ID)
+    }
+
+    /// Open epics of a repo, the candidates for a new issue's parent.
+    pub fn open_epics(&self, root: &Path) -> Vec<&Issue> {
+        self.repos
+            .iter()
+            .find(|e| e.info.root == root)
+            .map(|e| {
+                e.issues
+                    .iter()
+                    .filter(|i| i.kind == Some(Kind::Epic) && i.status == Status::Open)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Queues behind earlier writes to the repo; the form stays up, locked, until the result arrives.
+    fn submit_new_issue(&mut self) -> Task<Message> {
+        let Some(form) = self.new_issue.as_mut().filter(|f| !f.submitting) else {
+            return Task::none();
+        };
+        let new = NewIssue {
+            kind: form.kind,
+            title: form.title.trim().to_owned(),
+            body: form.body.text().trim_end().to_owned(),
+            epic: form.epic.clone(),
+        };
+        if new.title.is_empty() {
+            form.error = Some(GitBugError::EmptyTitle.to_string());
+            return Task::none();
+        }
+        form.submitting = true;
+        form.error = None;
+        let root = form.root.clone();
+        let ticket = self.writes.enter(&root);
+        Task::perform(
+            async move {
+                ticket.turn().await;
+                let result = gitbug::create(&root, &new)
+                    .await
+                    .map(Box::new)
+                    .map_err(|e| e.to_string());
+                (root, result)
+            },
+            |(root, result)| Message::IssueCreated { root, result },
+        )
+    }
+
+    /// The issue is added to the list at once; the stale fingerprint makes the follow-up check reload the repo for real.
+    fn on_created(
+        &mut self,
+        root: PathBuf,
+        result: Result<Box<IssueDetail>, String>,
+    ) -> Task<Message> {
+        let detail = match result {
+            Ok(detail) => *detail,
+            Err(msg) => {
+                if let Some(form) = self.new_issue.as_mut().filter(|f| f.root == root) {
+                    form.submitting = false;
+                    form.error = Some(msg);
+                }
+                return Task::none();
+            }
+        };
+        if self.new_issue.as_ref().is_some_and(|f| f.root == root) {
+            self.new_issue = None;
+        }
+        let issue = detail.issue.clone();
+        let id = issue.id.clone();
+        self.notify(
+            Tone::Success,
+            format!("Created {}", issue.human_id),
+            Some(issue.title.clone()),
+        );
+        self.detail_cache.insert(
+            root.clone(),
+            id.clone(),
+            issue.edited.clone(),
+            Rc::new(LoadedDetail::new(detail)),
+        );
+        let Some(persist) = self.insert_issue(&root, issue) else {
+            return Task::none();
+        };
+        self.section = Section::Issues;
+        let key = (root.clone(), id.clone());
+        if !self.rows.iter().any(|r| {
+            let entry = &self.repos[r.repo];
+            entry.info.root == key.0 && entry.issues[r.issue].id == key.1
+        }) {
+            self.filter = Filter::default();
+            self.search.clear();
+            self.search_seq += 1;
+            self.roadmap = false;
+            self.apply_filter();
+        }
+        let select = self.update(Message::SelectIssue { root, id });
+        let scroll = match self.cursor_index() {
+            Some(at) => self.scroll_to(at),
+            None => Task::none(),
+        };
+        Task::batch([persist, select, scroll, self.check_tracked()])
+    }
+
+    /// Adds or replaces one issue, keeping the layer order a fresh load would give. `None` when the repo is gone.
+    fn insert_issue(&mut self, root: &Path, issue: Issue) -> Option<Task<Message>> {
+        let entry = self.repos.iter_mut().find(|e| e.info.root == root)?;
+        let mut issues = std::mem::take(&mut entry.issues);
+        match issues.iter().position(|i| i.id == issue.id) {
+            Some(pos) => issues[pos] = issue,
+            None => issues.push(issue),
+        }
+        issues.sort_by_key(|i| i.layer.unwrap_or(u32::MAX));
+        entry.set_issues(issues);
+        if matches!(entry.state, LoadState::Ready(_)) {
+            entry.state = LoadState::Ready(entry.issues.len());
+        }
+        let persist = entry
+            .fingerprint
+            .clone()
+            .map(|fp| (entry.info.clone(), fp, entry.issues.clone()));
+        self.refilter();
+        Some(match persist {
+            Some((info, fp, issues)) => self.persist_issues(info, fp, issues),
+            None => Task::none(),
+        })
     }
 
     fn open_cursor(&mut self) -> Task<Message> {
@@ -1457,6 +1708,13 @@ impl App {
         {
             self.done = None;
         }
+        if self
+            .new_issue
+            .as_ref()
+            .is_some_and(|f| !known.contains(&&f.root))
+        {
+            self.new_issue = None;
+        }
         self.refilter();
 
         let mut tasks = vec![self.persist_repos(found)];
@@ -1732,7 +1990,8 @@ impl App {
             .done
             .as_ref()
             .is_some_and(|d| matches!(d.phase, DonePhase::Loading | DonePhase::Closing));
-        if self.is_busy() || !self.pending.is_empty() || sheet_busy {
+        let creating = self.new_issue.as_ref().is_some_and(|f| f.submitting);
+        if self.is_busy() || !self.pending.is_empty() || sheet_busy || creating {
             subs.push(time::every(SPIN_EVERY).map(|_| Message::Spin));
         }
         if self.needs_frames() {
@@ -3129,6 +3388,204 @@ mod tests {
         assert!(app.detail.is_some());
         escape(&mut app, true);
         assert!(app.detail.is_some());
+    }
+
+    fn form(app: &App) -> &NewIssueForm {
+        app.new_issue.as_ref().expect("dialog is open")
+    }
+
+    fn created_issue(kind: Kind) -> Issue {
+        Issue {
+            id: "f".repeat(64),
+            human_id: "fffffff".into(),
+            kind: Some(kind),
+            ..titled("new one", Status::Open)
+        }
+    }
+
+    fn created(root: PathBuf, issue: Issue) -> Message {
+        Message::IssueCreated {
+            root,
+            result: Ok(Box::new(IssueDetail {
+                issue,
+                body: "body".into(),
+                comments: vec![],
+            })),
+        }
+    }
+
+    fn fill(app: &mut App, title: &str) {
+        app.send(Message::NewIssueTitle(title.into()));
+    }
+
+    #[test]
+    fn the_dialog_defaults_to_the_filtered_repo_else_the_first_one() {
+        let mut app = booted(&["a", "b"]);
+        app.send(Message::OpenNewIssue(NewKind::Bug));
+        assert_eq!(form(&app).root, info("a").root);
+        assert_eq!(form(&app).kind, NewKind::Bug);
+
+        let mut app = booted(&["a", "b"]);
+        app.send(Message::PickRepo(Some(info("b").root)));
+        app.send(Message::OpenNewIssue(NewKind::Task));
+        assert_eq!(form(&app).root, info("b").root);
+        assert_eq!(form(&app).kind, NewKind::Task);
+    }
+
+    #[test]
+    fn without_a_writable_repo_the_dialog_says_so_instead_of_opening() {
+        let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
+        app.send(Message::OpenNewIssue(NewKind::Bug));
+        assert!(app.new_issue.is_none());
+        assert_eq!(app.notifications.len(), 1);
+    }
+
+    #[test]
+    fn command_n_opens_the_dialog_and_it_swallows_other_shortcuts() {
+        let mut app = numbered(1);
+        cmd(&mut app, "n");
+        assert!(app.new_issue.is_some());
+        cmd(&mut app, "2");
+        assert_eq!(app.section, Section::Issues);
+        tap(&mut app, "j");
+        assert!(app.cursor.is_none());
+        escape(&mut app, false);
+        assert!(app.new_issue.is_none());
+    }
+
+    #[test]
+    fn an_empty_title_never_reaches_git_bug() {
+        let mut app = booted(&["a"]);
+        app.send(Message::OpenNewIssue(NewKind::Bug));
+        fill(&mut app, "   ");
+        assert_eq!(app.update(Message::SubmitNewIssue).units(), 0);
+        assert!(!form(&app).submitting);
+        assert_eq!(form(&app).error.as_deref(), Some("title is empty"));
+    }
+
+    #[test]
+    fn submitting_locks_the_form_and_sends_exactly_one_create() {
+        let mut app = booted(&["a"]);
+        app.send(Message::OpenNewIssue(NewKind::Bug));
+        fill(&mut app, "boom");
+        assert_eq!(app.update(Message::SubmitNewIssue).units(), 1);
+        assert!(form(&app).submitting);
+
+        assert_eq!(app.update(Message::SubmitNewIssue).units(), 0);
+        fill(&mut app, "changed");
+        app.send(Message::NewIssueKind(NewKind::Epic));
+        assert_eq!(form(&app).title, "boom");
+        assert_eq!(form(&app).kind, NewKind::Bug);
+
+        app.send(Message::DismissNewIssue);
+        escape(&mut app, false);
+        assert!(app.new_issue.is_some(), "never closes mid-create");
+    }
+
+    #[test]
+    fn a_failed_create_keeps_the_form_and_shows_the_error() {
+        let mut app = booted(&["a"]);
+        app.send(Message::OpenNewIssue(NewKind::Bug));
+        fill(&mut app, "boom");
+        let _ = app.update(Message::SubmitNewIssue);
+        app.send(Message::IssueCreated {
+            root: info("a").root,
+            result: Err("git-bug bug new failed: nope".into()),
+        });
+        let f = form(&app);
+        assert!(!f.submitting);
+        assert_eq!(f.title, "boom");
+        assert_eq!(f.error.as_deref(), Some("git-bug bug new failed: nope"));
+        assert!(app.notifications.is_empty());
+    }
+
+    #[test]
+    fn a_created_issue_is_listed_selected_and_announced() {
+        let mut app = numbered(2);
+        app.send(Message::OpenNewIssue(NewKind::Task));
+        fill(&mut app, "new one");
+        let _ = app.update(Message::SubmitNewIssue);
+        app.send(created(info("a").root, created_issue(Kind::Task)));
+
+        assert!(app.new_issue.is_none());
+        assert_eq!(app.repos[0].issues.len(), 3);
+        assert_eq!(app.repos[0].state, LoadState::Ready(3));
+        assert_eq!(cursor_title(&app).as_deref(), Some("new one"));
+        assert_eq!(detail_title(&app), Some("new one"));
+        assert_eq!(app.section, Section::Issues);
+        let last = app.notifications.last().unwrap();
+        assert_eq!(last.title, "Created fffffff");
+        assert_eq!(last.detail.as_deref(), Some("new one"));
+        assert!(
+            app.batch.is_some(),
+            "the repo is re-checked for a real load"
+        );
+    }
+
+    #[test]
+    fn a_created_issue_hidden_by_the_filters_clears_them() {
+        let mut app = numbered(2);
+        app.send(Message::ToggleKind(Kind::Epic));
+        assert!(app.rows.is_empty());
+        app.send(Message::OpenNewIssue(NewKind::Task));
+        fill(&mut app, "new one");
+        let _ = app.update(Message::SubmitNewIssue);
+        app.send(created(info("a").root, created_issue(Kind::Task)));
+        assert_eq!(app.filter, Filter::default());
+        assert_eq!(cursor_title(&app).as_deref(), Some("new one"));
+    }
+
+    #[test]
+    fn open_epics_list_only_open_epics_of_that_repo() {
+        let mut app = epic_app();
+        assert_eq!(app.open_epics(&info("a").root).len(), 1);
+        let root = info("a").root;
+        let closed = Issue {
+            id: "c".repeat(64),
+            kind: Some(Kind::Epic),
+            ..titled("old epic", Status::Closed)
+        };
+        let _ = app.insert_issue(&root, closed);
+        assert_eq!(app.open_epics(&root).len(), 1);
+        assert!(app.open_epics(Path::new("/r/none")).is_empty());
+    }
+
+    #[test]
+    fn changing_the_repo_drops_the_chosen_epic() {
+        let mut app = booted(&["a", "b"]);
+        app.send(Message::OpenNewIssue(NewKind::Task));
+        app.send(Message::NewIssueEpic(Some("e".repeat(64))));
+        app.send(Message::NewIssueRepo(info("a").root));
+        assert!(form(&app).epic.is_some(), "same repo keeps it");
+        app.send(Message::NewIssueRepo(info("b").root));
+        assert_eq!(form(&app).root, info("b").root);
+        assert!(form(&app).epic.is_none());
+    }
+
+    #[test]
+    fn dropping_the_repo_closes_its_dialog() {
+        let mut app = booted(&["a", "b"]);
+        app.send(Message::PickRepo(Some(info("b").root)));
+        app.send(Message::OpenNewIssue(NewKind::Bug));
+        app.epoch = 2;
+        app.send(Message::Discovered {
+            epoch: 2,
+            repos: vec![info("a")],
+        });
+        assert!(app.new_issue.is_none());
+    }
+
+    #[test]
+    fn the_dialog_view_builds_in_every_shape() {
+        let mut app = epic_app();
+        for kind in NewKind::ALL {
+            app.new_issue = None;
+            app.send(Message::OpenNewIssue(kind));
+            let _ = app.view();
+            fill(&mut app, "x");
+            let _ = app.update(Message::SubmitNewIssue);
+            let _ = app.view();
+        }
     }
 
     #[test]

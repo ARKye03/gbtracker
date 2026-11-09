@@ -24,6 +24,50 @@ impl StateTarget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewKind {
+    Bug,
+    Task,
+    Epic,
+}
+
+impl NewKind {
+    pub const ALL: [NewKind; 3] = [NewKind::Bug, NewKind::Task, NewKind::Epic];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            NewKind::Bug => "bug",
+            NewKind::Task => "task",
+            NewKind::Epic => "epic",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewIssue {
+    pub kind: NewKind,
+    pub title: String,
+    pub body: String,
+    /// Full id of the parent epic; ignored for epics.
+    pub epic: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CreatePlan {
+    new_args: Vec<String>,
+    labels: Vec<String>,
+}
+
+impl CreatePlan {
+    fn label_args(&self, id: &str) -> Vec<String> {
+        ["bug", "label", "new", id]
+            .into_iter()
+            .map(str::to_owned)
+            .chain(self.labels.iter().cloned())
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteOp {
     Close,
@@ -110,6 +154,37 @@ fn plan_state(issue: &Issue, target: StateTarget) -> Result<Vec<Step>, GitBugErr
     Ok(steps)
 }
 
+/// `--flag=value` on purpose: a title or body starting with `-` would otherwise read as a flag.
+fn plan_create(new: &NewIssue) -> Result<CreatePlan, GitBugError> {
+    let title = new.title.trim();
+    if title.is_empty() {
+        return Err(GitBugError::EmptyTitle);
+    }
+    let mut labels = vec![format!("kind:{}", new.kind.name())];
+    if new.kind != NewKind::Epic
+        && let Some(epic) = &new.epic
+    {
+        labels.push(format!("epic:{epic}"));
+    }
+    Ok(CreatePlan {
+        new_args: vec![
+            "bug".to_owned(),
+            "new".to_owned(),
+            format!("--title={title}"),
+            format!("--message={}", new.body),
+            "--non-interactive".to_owned(),
+        ],
+        labels,
+    })
+}
+
+/// `bug new` prints `<human id> created`.
+fn parse_created(out: &str) -> Option<&str> {
+    out.lines()
+        .find_map(|l| l.trim().strip_suffix(" created"))
+        .and_then(|l| l.split_whitespace().next())
+}
+
 async fn run_steps(root: &Path, id: &str, steps: &[Step]) -> Result<(), GitBugError> {
     for step in steps {
         let args = step.args(id);
@@ -169,6 +244,24 @@ pub async fn comment(root: &Path, id: &str, body: &str) -> Result<IssueDetail, G
         ],
     )
     .await?;
+    show(root, &full).await
+}
+
+/// Rejects an empty title before touching git-bug, then labels the new bug in one call. A labelling failure names the unlabelled bug.
+pub async fn create(root: &Path, new: &NewIssue) -> Result<IssueDetail, GitBugError> {
+    let plan = plan_create(new)?;
+    let args: Vec<&str> = plan.new_args.iter().map(String::as_str).collect();
+    let out = cli::run(root, &args).await?;
+    let human = parse_created(&out).ok_or_else(|| GitBugError::UnexpectedOutput(out.clone()))?;
+    let full = show(root, human).await?.issue.id;
+    let labels = plan.label_args(&full);
+    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+    cli::run(root, &labels)
+        .await
+        .map_err(|e| GitBugError::Unlabelled {
+            id: human.to_owned(),
+            cause: e.to_string(),
+        })?;
     show(root, &full).await
 }
 
@@ -297,6 +390,150 @@ mod tests {
             Step::SetStatus(Status::Open).args("id"),
             ["bug", "status", "open", "id"]
         );
+    }
+
+    fn new_issue(kind: NewKind, epic: Option<&str>) -> NewIssue {
+        NewIssue {
+            kind,
+            title: "  L1 — a title  ".into(),
+            body: "# body".into(),
+            epic: epic.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_task_with_an_epic_gets_both_labels_in_one_call() {
+        let epic = "e".repeat(64);
+        let plan = plan_create(&new_issue(NewKind::Task, Some(&epic))).unwrap();
+        assert_eq!(
+            plan.labels,
+            ["kind:task".to_owned(), format!("epic:{epic}")]
+        );
+        assert_eq!(
+            plan.label_args("id"),
+            [
+                "bug",
+                "label",
+                "new",
+                "id",
+                "kind:task",
+                &format!("epic:{epic}")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bug_without_an_epic_gets_only_its_kind() {
+        let plan = plan_create(&new_issue(NewKind::Bug, None)).unwrap();
+        assert_eq!(plan.labels, ["kind:bug"]);
+    }
+
+    #[test]
+    fn an_epic_never_gets_a_parent() {
+        let plan = plan_create(&new_issue(NewKind::Epic, Some(&"e".repeat(64)))).unwrap();
+        assert_eq!(plan.labels, ["kind:epic"]);
+    }
+
+    #[test]
+    fn new_uses_equals_flags_so_dashes_stay_data() {
+        let mut new = new_issue(NewKind::Bug, None);
+        new.title = "--help".into();
+        new.body = "-F x".into();
+        assert_eq!(
+            plan_create(&new).unwrap().new_args,
+            [
+                "bug",
+                "new",
+                "--title=--help",
+                "--message=-F x",
+                "--non-interactive"
+            ]
+        );
+        assert_eq!(
+            plan_create(&new_issue(NewKind::Bug, None))
+                .unwrap()
+                .new_args[2],
+            "--title=L1 — a title"
+        );
+    }
+
+    #[test]
+    fn an_empty_title_is_rejected_by_the_plan() {
+        for title in ["", "  \n\t"] {
+            let mut new = new_issue(NewKind::Bug, None);
+            new.title = title.into();
+            assert!(matches!(plan_create(&new), Err(GitBugError::EmptyTitle)));
+        }
+    }
+
+    #[test]
+    fn the_new_id_is_read_from_the_created_line() {
+        assert_eq!(parse_created("3461ebc created\n"), Some("3461ebc"));
+        assert_eq!(
+            parse_created("Building cache ... done\nabcdef0 created\n"),
+            Some("abcdef0")
+        );
+        assert_eq!(parse_created("Aborting\n"), None);
+        assert_eq!(parse_created(""), None);
+    }
+
+    #[tokio::test]
+    async fn an_empty_title_is_rejected_before_touching_git_bug() {
+        let err = create(Path::new("/definitely/not/a/repo"), &{
+            let mut new = new_issue(NewKind::Task, None);
+            new.title = " ".into();
+            new
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(err, GitBugError::EmptyTitle));
+    }
+
+    #[tokio::test]
+    async fn create_labels_a_task_under_its_epic() {
+        if !git_bug_available().await {
+            return;
+        }
+        let (dir, parent) = sandbox().await;
+        let root = dir.path();
+        let new = NewIssue {
+            kind: NewKind::Task,
+            title: "L2 — child".into(),
+            body: "## Heading\n\n- item".into(),
+            epic: Some(parent.clone()),
+        };
+        let detail = create(root, &new).await.unwrap();
+        assert_eq!(detail.issue.kind, Some(super::super::Kind::Task));
+        assert_eq!(detail.issue.epic.as_deref(), Some(parent.as_str()));
+        assert_eq!(detail.issue.title, "L2 — child");
+        assert_eq!(detail.body, "## Heading\n\n- item");
+        assert_eq!(detail.issue.status, Status::Open);
+
+        let epic = NewIssue {
+            kind: NewKind::Epic,
+            title: "an epic".into(),
+            body: "why".into(),
+            epic: Some(parent),
+        };
+        let detail = create(root, &epic).await.unwrap();
+        assert_eq!(detail.issue.kind, Some(super::super::Kind::Epic));
+        assert_eq!(detail.issue.epic, None);
+    }
+
+    #[tokio::test]
+    async fn create_accepts_an_empty_body() {
+        if !git_bug_available().await {
+            return;
+        }
+        let (dir, _) = sandbox().await;
+        let new = NewIssue {
+            kind: NewKind::Bug,
+            title: "no body".into(),
+            body: String::new(),
+            epic: None,
+        };
+        let detail = create(dir.path(), &new).await.unwrap();
+        assert_eq!(detail.issue.title, "no body");
     }
 
     #[tokio::test]

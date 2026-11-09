@@ -11,19 +11,18 @@ use lucide_iced::icon as lu;
 use super::components::{
     MEDIUM, card_grid, chip, choice_button, detail_row, dot, icon, icon_muted, icon_pill,
     icon_pill_hint, icon_square_button, icon_square_button_hint, labeled, primary_button,
-    secondary_button, skeleton, spinner_dot, split_progress, toggle_chip, top_pill, top_pill_maybe,
-    vdivider,
+    secondary_button, skeleton, spinner_dot, split_progress, toggle_chip, top_pill, vdivider,
 };
 use super::popover::{self, Align};
 use super::tooltip::tip;
-use super::{detail, done, shortcuts};
+use super::{detail, done, new_issue, shortcuts};
 use crate::Section;
 use crate::app::{App, LIST_ID, LoadState, Message, Popover, RepoEntry, Row, SEARCH_ID, ago};
 use crate::keymap::{self, Action};
 use crate::theme::{Tone, style};
 use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{Filter, StateFilter, StatusFilter};
-use gbtracker::gitbug::{Issue, Kind, State, Status, WriteOp};
+use gbtracker::gitbug::{Issue, Kind, NewKind, State, Status, WriteOp};
 use gbtracker::workspace::{Root, RootKind, ThemePref};
 
 const SIDEBAR_WIDTH: f32 = 276.0;
@@ -70,7 +69,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .height(Fill)
     .style(style::app);
 
-    let page = popover::scrim(app, done::overlay(app, page.into()));
+    let page = popover::scrim(
+        app,
+        new_issue::overlay(app, done::overlay(app, page.into())),
+    );
     shortcuts::overlay(app, page)
 }
 
@@ -94,9 +96,14 @@ fn top_bar(app: &App) -> Element<'_, Message> {
         )
         .shortcut_maybe(keymap::hint(Action::FocusSearch)),
         tip(
-            top_pill_maybe(labeled(lu::plus(), "New Bug"), false, None),
-            "Not available yet"
-        ),
+            top_pill(
+                labeled(lu::plus(), "New Bug"),
+                false,
+                Message::OpenNewIssue(NewKind::Bug)
+            ),
+            "New issue"
+        )
+        .shortcut_maybe(keymap::hint(Action::NewIssue)),
         vdivider(),
         top_pill(
             labeled(lu::folder_git_2(), "Repositories"),

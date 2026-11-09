@@ -5,7 +5,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-pub use write::{StateTarget, WriteOp, apply, close, comment, reopen, set_state};
+pub use write::{
+    NewIssue, NewKind, StateTarget, WriteOp, apply, close, comment, create, reopen, set_state,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GitBugError {
@@ -25,6 +27,12 @@ pub enum GitBugError {
     Closed(String),
     #[error("comment is empty")]
     EmptyComment,
+    #[error("title is empty")]
+    EmptyTitle,
+    #[error("unexpected output from git-bug bug new: {0:?}")]
+    UnexpectedOutput(String),
+    #[error("created {id} but could not label it: {cause}")]
+    Unlabelled { id: String, cause: String },
     #[error("unexpected git-bug output: {0}")]
     Parse(#[from] serde_json::Error),
     #[error("git-bug returned no comments for {0}")]

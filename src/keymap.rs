@@ -11,6 +11,7 @@ pub enum Action {
     FocusSearch,
     CycleTheme,
     Rescan,
+    NewIssue,
     Next,
     Previous,
     Open,
@@ -46,6 +47,7 @@ impl Action {
             Action::FocusSearch => "Search issues".into(),
             Action::CycleTheme => "Cycle theme".into(),
             Action::Rescan => "Rescan repositories".into(),
+            Action::NewIssue => "New issue".into(),
             Action::Next => "Next issue".into(),
             Action::Previous => "Previous issue".into(),
             Action::Open => "Open issue details".into(),
@@ -59,7 +61,11 @@ impl Action {
         match self {
             Action::Goto(_) | Action::ToggleSidebar | Action::FocusSearch => Group::Navigation,
             Action::Next | Action::Previous | Action::Open | Action::ToggleStatus => Group::Issues,
-            Action::CycleTheme | Action::Rescan | Action::Help | Action::Escape => Group::General,
+            Action::CycleTheme
+            | Action::Rescan
+            | Action::NewIssue
+            | Action::Help
+            | Action::Escape => Group::General,
         }
     }
 }
@@ -70,7 +76,7 @@ pub struct Context {
     /// A widget captured the press, so the user is typing.
     pub typing: bool,
     pub section: Section,
-    /// Help or the Roadmap Done sheet is up; only help and escape resolve.
+    /// Help, the Roadmap Done sheet or the new issue dialog is up; only help and escape resolve.
     pub modal_open: bool,
 }
 
@@ -148,7 +154,7 @@ const fn named(key: Named, scope: Scope, action: Action) -> Binding {
     }
 }
 
-const BINDINGS: [Binding; 22] = [
+const BINDINGS: [Binding; 23] = [
     cmd("1", Action::Goto(Section::ALL[0])),
     cmd("2", Action::Goto(Section::ALL[1])),
     cmd("3", Action::Goto(Section::ALL[2])),
@@ -168,6 +174,7 @@ const BINDINGS: [Binding; 22] = [
     plain("x", Scope::Issues, Action::ToggleStatus),
     cmd_shift("l", Action::CycleTheme),
     cmd("r", Action::Rescan),
+    cmd("n", Action::NewIssue),
     plain("?", Scope::Anywhere, Action::Help),
     cmd("/", Action::Help),
     named(Named::Escape, Scope::Anywhere, Action::Escape),
@@ -308,6 +315,7 @@ mod tests {
             ("l", CMD | Modifiers::SHIFT, Action::CycleTheme),
             ("L", CMD | Modifiers::SHIFT, Action::CycleTheme),
             ("r", CMD, Action::Rescan),
+            ("n", CMD, Action::NewIssue),
             ("/", CMD, Action::Help),
         ] {
             assert_eq!(resolve(&ch(key), mods, c), Some(action), "{key}");
@@ -465,7 +473,7 @@ mod tests {
     fn help_lists_every_action_once_with_all_its_chords() {
         let all: Vec<_> = Group::ALL.iter().flat_map(|g| rows(*g, false)).collect();
         let labels: Vec<_> = all.iter().map(|(l, _)| l.as_str()).collect();
-        assert_eq!(labels.len(), 8 + 2 + 4 + 4);
+        assert_eq!(labels.len(), 8 + 2 + 4 + 5);
         let search = all.iter().find(|(l, _)| l == "Search issues").unwrap();
         assert_eq!(search.1, ["Ctrl+K", "Ctrl+F"]);
         let help = all
