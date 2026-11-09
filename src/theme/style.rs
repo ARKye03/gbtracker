@@ -196,11 +196,32 @@ pub fn pill(theme: &Theme, status: button::Status) -> button::Style {
     filled(bg, t.text, radius::LG)
 }
 
-pub fn pill_active(theme: &Theme, _status: button::Status) -> button::Style {
+/// Selected filter chip / active top pill: tinted fill, accent border and text.
+pub fn chip_selected(theme: &Theme, _status: button::Status) -> button::Style {
     let t = Tokens::of(theme);
     button::Style {
-        shadow: soft_shadow(&t),
-        ..filled(t.surface, t.text, radius::LG)
+        border: Border {
+            color: t.accent,
+            width: 1.0,
+            radius: radius::LG.into(),
+        },
+        ..filled(t.accent_soft, t.accent, radius::LG)
+    }
+}
+
+pub fn chip_unselected(theme: &Theme, status: button::Status) -> button::Style {
+    let t = Tokens::of(theme);
+    let bg = match status {
+        button::Status::Hovered | button::Status::Pressed => t.fill.scale_alpha(0.5),
+        _ => Color::TRANSPARENT,
+    };
+    button::Style {
+        border: Border {
+            color: t.border,
+            width: 1.0,
+            radius: radius::LG.into(),
+        },
+        ..filled(bg, t.text_muted, radius::LG)
     }
 }
 
@@ -222,6 +243,18 @@ pub fn nav_item_active(theme: &Theme, _status: button::Status) -> button::Style 
     button::Style {
         shadow: soft_shadow(&t),
         ..filled(t.surface, t.text, radius::LG)
+    }
+}
+
+/// Left-edge marker for the active sidebar item.
+pub fn nav_bar(active: bool) -> impl Fn(&Theme) -> container::Style {
+    move |theme| {
+        let t = Tokens::of(theme);
+        container::Style {
+            background: active.then(|| t.accent.into()),
+            border: border::rounded(radius::PILL),
+            ..container::Style::default()
+        }
     }
 }
 
@@ -354,6 +387,12 @@ pub fn tone_text(tone: Tone, soft: bool) -> impl Fn(&Theme) -> text::Style {
 pub fn icon(theme: &Theme, _status: svg::Status) -> svg::Style {
     svg::Style {
         color: Some(Tokens::of(theme).text),
+    }
+}
+
+pub fn icon_accent(theme: &Theme, _status: svg::Status) -> svg::Style {
+    svg::Style {
+        color: Some(Tokens::of(theme).accent),
     }
 }
 

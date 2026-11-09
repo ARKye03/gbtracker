@@ -8,7 +8,7 @@ use iced::{Alignment, Element, Fill, Padding};
 use lucide_iced::icon as lu;
 
 use super::components::{
-    MEDIUM, chip, choice_button, detail_row, dot, icon, icon_muted, icon_pill, labeled,
+    MEDIUM, card_grid, chip, choice_button, detail_row, dot, icon, icon_muted, icon_pill, labeled,
     primary_button, secondary_button, skeleton, spinner_dot, split_progress, toggle_chip, top_pill,
     vdivider,
 };
@@ -168,16 +168,24 @@ fn sidebar(app: &App) -> Element<'_, Message> {
     let active = app.section;
     let items = Section::ALL.iter().map(|&s| {
         let (svg, label) = s.meta();
-        button(labeled(svg, label))
-            .width(Fill)
-            .padding([12, 16])
-            .style(if s == active {
-                style::nav_item_active
-            } else {
-                style::nav_item
-            })
-            .on_press(Message::Navigate(s))
-            .into()
+        let is_active = s == active;
+        row![
+            container(space())
+                .width(3)
+                .height(Fill)
+                .style(style::nav_bar(is_active)),
+            button(labeled(svg, label))
+                .width(Fill)
+                .padding([12, 16])
+                .style(if is_active {
+                    style::nav_item_active
+                } else {
+                    style::nav_item
+                })
+                .on_press(Message::Navigate(s))
+        ]
+        .spacing(4)
+        .into()
     });
 
     column![
@@ -255,6 +263,7 @@ fn epics_page(app: &App) -> Element<'_, Message> {
         toggle_chip(
             label,
             app.epic_filter.status == value,
+            false,
             Message::SetEpicStatus(value),
         )
     }))
@@ -448,11 +457,8 @@ fn overview(app: &App) -> Element<'_, Message> {
             .into()
         }
     } else {
-        row(tracked.into_iter().map(|e| overview_card(e, app.spin)))
-            .spacing(16)
-            .wrap()
-            .vertical_spacing(16)
-            .into()
+        let spin = app.spin;
+        card_grid(tracked, 380.0, 16.0, move |e| overview_card(e, spin))
     };
 
     column![
@@ -509,7 +515,7 @@ fn overview_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
         .spacing(24),
     )
     .padding(28)
-    .width(380)
+    .width(Fill)
     .style(style::card)
     .into()
 }
@@ -828,7 +834,7 @@ fn filter_bar(app: &App) -> Element<'_, Message> {
     .into_iter()
     .map(|(label, kind)| {
         let active = filter.kinds.contains(&kind);
-        toggle_chip(label, active, Message::ToggleKind(kind))
+        toggle_chip(label, active, true, Message::ToggleKind(kind))
     }))
     .spacing(6);
 
@@ -838,7 +844,14 @@ fn filter_bar(app: &App) -> Element<'_, Message> {
         ("All", StatusFilter::All),
     ]
     .into_iter()
-    .map(|(label, value)| toggle_chip(label, filter.status == value, Message::SetStatus(value))))
+    .map(|(label, value)| {
+        toggle_chip(
+            label,
+            filter.status == value,
+            false,
+            Message::SetStatus(value),
+        )
+    }))
     .spacing(6);
 
     let state = row([
@@ -847,7 +860,14 @@ fn filter_bar(app: &App) -> Element<'_, Message> {
         ("Blocked", StateFilter::Blocked),
     ]
     .into_iter()
-    .map(|(label, value)| toggle_chip(label, filter.state == value, Message::SetState(value))))
+    .map(|(label, value)| {
+        toggle_chip(
+            label,
+            filter.state == value,
+            false,
+            Message::SetState(value),
+        )
+    }))
     .spacing(6);
 
     let repo = repo_picker(app, filter, Message::PickRepo);

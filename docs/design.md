@@ -23,11 +23,13 @@ GBTRACKER_THEME=dark cargo run    # dark (or use the moon/sun button in the top 
 ## Theme rules
 
 - Colors come only from `Tokens`. Style fns call `Tokens::of(theme)`, which picks `LIGHT` or `DARK` based on `is_dark`. No hex values in screens.
-- Surfaces, from back to front: `app_bg` (window + top bar) → `panel` (content area, rounded top) → `surface` (cards, active tab, active nav item).
+- Surfaces, from back to front: `app_bg` (window + top bar) → `panel` (content area, rounded top) → `surface` (cards, active nav item).
 - Neutral fills: `fill` for secondary buttons and pills, `chip` for labels and icon squares.
 - One accent color, mauve: `#8839ef` in light mode, `#cba6f7` in dark mode. Text on the dark accent is `#1e1e2e` because white is unreadable on it. Use the accent for the single primary action per page. The proposal's green still marks progress and status (`Tone`).
 - `Tone::for_ratio`: ≥50% success, ≥20% warning, otherwise danger. Bars use the strong tone on a tinted track; the remaining-percentage label uses the soft tone.
 - Radii: `SM` 6 for chips, `MD` 8 for buttons, `LG` 12 for pills and nav items, `XL` 18 for cards and the panel.
+- Selected state is never just a surface change. Chips and the active top pill use `chip_selected`: `accent_soft` fill, 1px `accent` border, `accent` text (≥3:1 against the panel, unit-tested for both palettes). Unselected chips are transparent with a 1px `border` and `text_muted`. Multi-select groups (Kind) add a leading check. The active sidebar item adds a 3px accent bar.
+- Card pages use `components::card_grid`: columns = `(w + gap) / (min_width + gap)`, cards are `Fill` width, the last row is padded to stay aligned. No fixed-width cards.
 - Shadows are a single soft 1px/6 blur, only on raised white surfaces.
 - Type scale: 29 for card headline numbers, 21 for page and sidebar titles, 18 for card titles, 15 for controls, 14 for body text, 13 for meta, chips and percentages.
 

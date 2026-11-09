@@ -1,7 +1,8 @@
 //! Reusable building blocks matching docs/proposal.jpg. Real screens should compose these, not restyle widgets ad hoc.
 
-use iced::widget::{Svg, button, column, container, progress_bar, row, space, text};
-use iced::{Alignment, Element, Fill, Font, Length, font};
+use iced::widget::{Svg, button, column, container, progress_bar, responsive, row, space, text};
+use iced::{Alignment, Element, Fill, Font, Length, Shrink, font};
+use lucide_iced::icon as lu;
 
 use crate::theme::{Tone, style};
 
@@ -35,7 +36,7 @@ pub fn top_pill<'a, M: Clone + 'a>(
         .height(40)
         .padding([0, 14])
         .style(if active {
-            style::pill_active
+            style::chip_selected
         } else {
             style::pill
         })
@@ -96,17 +97,64 @@ pub fn chip<'a, M: 'a>(label: impl text::IntoFragment<'a>) -> Element<'a, M> {
         .into()
 }
 
-/// Pressable chip for filters; the active one is raised like the active tab.
-pub fn toggle_chip<'a, M: Clone + 'a>(label: &'a str, active: bool, on_press: M) -> Element<'a, M> {
-    button(text(label).size(13))
+/// Pressable filter chip. Selected chips get an accent fill and border; in `multi` groups they also show a check.
+pub fn toggle_chip<'a, M: Clone + 'a>(
+    label: &'a str,
+    selected: bool,
+    multi: bool,
+    on_press: M,
+) -> Element<'a, M> {
+    let label = text(label).size(13);
+    let content: Element<'a, M> = if selected && multi {
+        row![
+            lu::check().width(13).height(13).style(style::icon_accent),
+            label
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        label.into()
+    };
+    button(content)
         .padding([6, 12])
-        .style(if active {
-            style::pill_active
+        .style(if selected {
+            style::chip_selected
         } else {
-            style::pill
+            style::chip_unselected
         })
         .on_press(on_press)
         .into()
+}
+
+/// Responsive grid: as many `min_width` columns as fit, cards share the row evenly and the last row is padded to stay aligned.
+pub fn card_grid<'a, T, M>(
+    items: Vec<T>,
+    min_width: f32,
+    gap: f32,
+    render: impl Fn(T) -> Element<'a, M> + 'a,
+) -> Element<'a, M>
+where
+    T: Clone + 'a,
+    M: 'a,
+{
+    responsive(move |size| {
+        let cols = grid_columns(size.width, min_width, gap);
+        column(items.chunks(cols).map(|chunk| {
+            let cells = chunk.iter().cloned().map(&render);
+            let padding = (0..cols - chunk.len()).map(|_| space::horizontal().into());
+            row(cells.chain(padding)).spacing(gap).width(Fill).into()
+        }))
+        .spacing(gap)
+        .width(Fill)
+        .into()
+    })
+    .height(Shrink)
+    .into()
+}
+
+fn grid_columns(width: f32, min_width: f32, gap: f32) -> usize {
+    (((width + gap) / (min_width + gap)).floor() as usize).max(1)
 }
 
 pub fn dot<'a, M: 'a>(tone: Tone, size: f32) -> Element<'a, M> {
@@ -180,4 +228,16 @@ pub fn vdivider<'a, M: 'a>() -> Element<'a, M> {
         .height(Length::Fixed(24.0))
         .style(style::divider)
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grid_columns;
+
+    #[test]
+    fn columns_scale_with_width() {
+        assert_eq!(grid_columns(100.0, 380.0, 16.0), 1);
+        assert_eq!(grid_columns(1280.0, 380.0, 16.0), 3);
+        assert_eq!(grid_columns(2560.0, 380.0, 16.0), 6);
+    }
 }

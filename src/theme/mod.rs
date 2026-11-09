@@ -77,6 +77,8 @@ pub struct Tokens {
     pub text_subtle: Color,
     pub accent: Color,
     pub accent_hover: Color,
+    /// Accent at ~15% over `panel`: background of selected chips and pills.
+    pub accent_soft: Color,
     pub on_accent: Color,
     pub success: Color,
     pub success_track: Color,
@@ -128,6 +130,7 @@ pub const LIGHT: Tokens = Tokens {
     text_subtle: color!(0xa4a3a6),
     accent: color!(0x8839ef),
     accent_hover: color!(0x7428d6),
+    accent_soft: color!(0xdfd2ed),
     on_accent: color!(0xffffff),
     success: color!(0x0f9f6e),
     success_track: color!(0xe3f3ec),
@@ -154,6 +157,7 @@ pub const DARK: Tokens = Tokens {
     text_subtle: color!(0x6b6b73),
     accent: color!(0xcba6f7),
     accent_hover: color!(0xd9bdfa),
+    accent_soft: color!(0x332d3c),
     on_accent: color!(0x1e1e2e),
     success: color!(0x22c08a),
     success_track: color!(0x173a2e),
@@ -166,3 +170,40 @@ pub const DARK: Tokens = Tokens {
     danger_soft: color!(0xb3625a),
     shadow: Color::from_rgba8(0, 0, 0, 0.35),
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn linear(c: f32) -> f32 {
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    fn luminance(c: Color) -> f32 {
+        0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b)
+    }
+
+    fn contrast(a: Color, b: Color) -> f32 {
+        let (la, lb) = (luminance(a), luminance(b));
+        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    // Unselected chips are transparent, so they read as the panel they sit on.
+    #[test]
+    fn selected_chip_is_distinct_from_unselected() {
+        for (name, t) in [("light", LIGHT), ("dark", DARK)] {
+            let unselected = t.panel;
+            let best = contrast(t.accent_soft, unselected).max(contrast(t.accent, unselected));
+            assert!(
+                best >= 3.0,
+                "{name}: selected vs unselected contrast {best:.2}"
+            );
+            let label = contrast(t.accent, t.accent_soft);
+            assert!(label >= 3.0, "{name}: selected label contrast {label:.2}");
+        }
+    }
+}
