@@ -561,7 +561,7 @@ fn repositories(app: &App) -> Element<'_, Message> {
     .spacing(12)
     .align_y(Alignment::Center);
 
-    let mut body = column![].spacing(16).padding(Padding {
+    let mut body = column![].spacing(10).padding(Padding {
         bottom: 24.0,
         right: 10.0,
         ..Padding::ZERO
@@ -577,7 +577,7 @@ fn repositories(app: &App) -> Element<'_, Message> {
     body = body.push(roots_card(app));
     if app.repos.is_empty() {
         if app.discovering {
-            body = body.extend((0..3).map(|_| skeleton_card()));
+            body = body.extend((0..3).map(|_| skeleton_repo_row()));
         }
     } else {
         body = body.extend(app.repos.iter().map(|r| repo_card(r, app.spin)));
@@ -673,16 +673,23 @@ fn status_badge(state: &LoadState, spin: usize) -> Element<'static, Message> {
 fn repo_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
     let mut heading = row![
         column![
-            text(&entry.info.name).size(18),
+            text(&entry.info.name).size(16),
             text(entry.info.root.display().to_string())
                 .size(13)
                 .style(style::subtle),
         ]
-        .spacing(4),
+        .spacing(2),
         space::horizontal(),
     ]
     .spacing(16)
     .align_y(Alignment::Center);
+    if entry.fingerprint.is_some() {
+        heading = heading.push(
+            text(format!("{} open", entry.open_count()))
+                .size(13)
+                .style(style::subtle),
+        );
+    }
     if entry.info.has_git_bug {
         heading = heading.push(choice_button(
             "Check Done",
@@ -695,48 +702,53 @@ fn repo_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
     }
     heading = heading.push(status_badge(&entry.state, spin));
 
-    let detail: Element<'_, Message> = match &entry.state {
-        LoadState::NoGitBug => text("git-bug is not initialised in this repository.")
-            .size(14)
-            .style(style::muted)
-            .into(),
-        LoadState::Error(msg) => text(msg)
-            .size(14)
-            .style(style::tone_text(Tone::Danger, false))
-            .into(),
-        LoadState::Locked if entry.fingerprint.is_none() => {
+    let message: Option<Element<'_, Message>> = match &entry.state {
+        LoadState::NoGitBug => Some(
+            text("git-bug is not initialised in this repository.")
+                .size(13)
+                .style(style::muted)
+                .into(),
+        ),
+        LoadState::Error(msg) => Some(
+            text(msg)
+                .size(13)
+                .style(style::tone_text(Tone::Danger, false))
+                .into(),
+        ),
+        LoadState::Locked => Some(
             text("Locked by another git-bug process; retrying.")
                 .size(13)
                 .style(style::tone_text(Tone::Warning, false))
-                .into()
-        }
-        LoadState::Loading if entry.fingerprint.is_none() => {
-            column![skeleton(220.0, 14.0), skeleton(140.0, 14.0)]
-                .spacing(10)
-                .into()
-        }
-        state => {
-            let mut rows = column![
-                detail_row("Open", entry.open_count().to_string()),
-                detail_row("Closed", entry.closed_count().to_string()),
-            ]
-            .spacing(12);
-            if *state == LoadState::Locked {
-                rows = rows.push(
-                    text("Locked by another git-bug process; retrying.")
-                        .size(13)
-                        .style(style::tone_text(Tone::Warning, false)),
-                );
-            }
-            rows.into()
-        }
+                .into(),
+        ),
+        _ => None,
     };
 
-    container(column![heading, detail].spacing(20))
-        .padding(28)
+    let mut content = column![heading].spacing(8);
+    if let Some(message) = message {
+        content = content.push(message);
+    }
+    container(content)
+        .padding([14, 20])
         .width(Fill)
         .style(style::card)
         .into()
+}
+
+fn skeleton_repo_row() -> Element<'static, Message> {
+    container(
+        row![
+            column![skeleton(160.0, 16.0), skeleton(240.0, 12.0)].spacing(6),
+            space::horizontal(),
+            skeleton(60.0, 14.0),
+        ]
+        .spacing(16)
+        .align_y(Alignment::Center),
+    )
+    .padding([14, 20])
+    .width(Fill)
+    .style(style::card)
+    .into()
 }
 
 fn skeleton_card() -> Element<'static, Message> {
