@@ -765,7 +765,23 @@ fn issues(app: &App) -> Element<'_, Message> {
         secondary_button("Open roadmap", Message::ToggleRoadmap)
     });
 
-    let mut list = column![].spacing(8).padding(Padding {
+    column![
+        header,
+        filter_bar(app),
+        scrollable(issue_list(app))
+            .height(Fill)
+            .style(style::scroll)
+    ]
+    .spacing(20)
+    .width(Fill)
+    .into()
+}
+
+// Rows are `lazy`, whose size hint is always `Shrink`; without an explicit width the column
+// collapses and the `Fill` cards inside get none.
+pub fn issue_list(app: &App) -> Element<'_, Message> {
+    let total = app.total_issues();
+    let mut list = column![].spacing(8).width(Fill).padding(Padding {
         bottom: 24.0,
         right: 10.0,
         ..Padding::ZERO
@@ -798,14 +814,7 @@ fn issues(app: &App) -> Element<'_, Message> {
         );
     }
 
-    column![
-        header,
-        filter_bar(app),
-        scrollable(list).height(Fill).style(style::scroll)
-    ]
-    .spacing(20)
-    .width(Fill)
-    .into()
+    list.into()
 }
 
 fn filter_bar(app: &App) -> Element<'_, Message> {
@@ -1021,6 +1030,7 @@ fn issue_card(
     };
 
     container(row![card, toggle].spacing(8).align_y(Alignment::Center))
+        .width(Fill)
         .padding(Padding {
             left: depth as f32 * 32.0,
             ..Padding::ZERO

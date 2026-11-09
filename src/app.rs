@@ -1677,6 +1677,16 @@ mod tests {
     }
 
     #[test]
+    fn issue_list_fills_width_despite_lazy_rows() {
+        use iced::Length;
+
+        let app = loaded(&[("one", Status::Open), ("two", Status::Open)]);
+        assert_eq!(app.rows.len(), 2);
+        let list = ui::screen::issue_list(&app);
+        assert_eq!(list.as_widget().size().width, Length::Fill);
+    }
+
+    #[test]
     fn filter_messages_recompute_rows() {
         let mut app = loaded(&[("one", Status::Open), ("two", Status::Closed)]);
         app.send(Message::SetStatus(StatusFilter::All));
