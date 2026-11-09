@@ -16,7 +16,7 @@ GBTRACKER_THEME=dark cargo run    # force dark for this run
 | `src/theme/mod.rs` | `Mode` (Light/Dark), `Tokens` (all colors), `Tone` (success/warning/danger) |
 | `src/theme/style.rs` | Style fns for `.style(...)`, plus `radius::*` |
 | `src/ui/components.rs` | Building blocks: pills, buttons, chip, dot, detail row, split progress |
-| `src/filter.rs` | `Filter`, pure `matches`, `/roadmap-open` ordering (`roadmap_order`) |
+| `src/filter.rs` | `Filter`, pure `matches`, active-work ordering (`active_order`) |
 | `src/ui/screen.rs` | Screens: top bar, sidebar, Repositories, Issues, Epics, Overview |
 | `src/epics.rs` | `EpicSummary` (children, ratio, in-progress/blocked, last activity) and per-repo open counts |
 
