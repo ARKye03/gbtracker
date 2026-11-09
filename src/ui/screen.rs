@@ -172,7 +172,7 @@ fn sidebar(app: &App) -> Element<'_, Message> {
         row![
             container(space())
                 .width(3)
-                .height(Fill)
+                .height(22)
                 .style(style::nav_bar(is_active)),
             button(labeled(svg, label))
                 .width(Fill)
@@ -185,6 +185,7 @@ fn sidebar(app: &App) -> Element<'_, Message> {
                 .on_press(Message::Navigate(s))
         ]
         .spacing(4)
+        .align_y(Alignment::Center)
         .into()
     });
 
