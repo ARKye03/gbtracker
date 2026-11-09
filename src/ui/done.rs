@@ -1,4 +1,4 @@
-//! Roadmap Done review sheet: one checkbox row per candidate with its commits; results tick in as closes finish.
+//! Check Done review sheet: one checkbox row per candidate with its commits; results tick in as closes finish.
 
 use iced::widget::{
     center, checkbox, column, container, mouse_area, opaque, row, scrollable, space, stack, text,
@@ -35,7 +35,7 @@ pub fn overlay<'a>(app: &'a App, base: Element<'a, Message>) -> Element<'a, Mess
 fn card<'a>(app: &'a App, sheet: &'a DoneSheet) -> Element<'a, Message> {
     let header = row![
         column![
-            text("Roadmap Done").size(20).font(MEDIUM),
+            text("Check Done").size(20).font(MEDIUM),
             text(sheet.name.as_str()).size(13).style(style::subtle),
         ]
         .spacing(4),

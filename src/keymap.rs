@@ -76,7 +76,7 @@ pub struct Context {
     /// A widget captured the press, so the user is typing.
     pub typing: bool,
     pub section: Section,
-    /// Help, the Roadmap Done sheet or the new issue dialog is up; only help and escape resolve.
+    /// Help, the Check Done sheet or the new issue dialog is up; only help and escape resolve.
     pub modal_open: bool,
 }
 

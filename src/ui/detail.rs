@@ -124,16 +124,7 @@ fn actions<'a>(app: &'a App, pane: &'a DetailPane, issue: &'a Issue) -> Element<
             op,
         })
     };
-    let copy = row![
-        secondary_button("Copy id", Message::Copy(issue.id.clone())),
-        secondary_button(
-            "Copy /roadmap:impl",
-            Message::Copy(format!("/roadmap:impl {}", issue.id))
-        ),
-    ]
-    .spacing(8)
-    .wrap()
-    .vertical_spacing(8);
+    let copy = row![secondary_button("Copy id", Message::Copy(issue.id.clone()))];
 
     let changes = if issue.status == Status::Closed {
         row![choice_button("Reopen", false, write(WriteOp::Reopen))]

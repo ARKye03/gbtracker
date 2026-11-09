@@ -1,4 +1,4 @@
-//! Pure issue filtering and the `/roadmap-open` ordering. Nothing here touches the UI.
+//! Pure issue filtering and the active-work ordering. Nothing here touches the UI.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -94,10 +94,10 @@ fn urgent(issue: &Issue) -> bool {
     matches!(issue.state, Some(State::InProgress | State::Blocked))
 }
 
-/// `/roadmap-open` order: in-progress/blocked groups first, children nested under their epic by layer.
+/// Active work order: in-progress/blocked groups first, children nested under their epic by layer.
 /// Each entry pairs a repo index with its issue, since clones of one project share git-bug ids.
 /// Indices refer to `issues`; an issue whose epic is not in the slice stays top level.
-pub fn roadmap_order(entries: &[(usize, &Issue)]) -> Vec<Placed> {
+pub fn active_order(entries: &[(usize, &Issue)]) -> Vec<Placed> {
     let issues: Vec<&Issue> = entries.iter().map(|&(_, i)| i).collect();
     let epic_at: HashMap<(usize, &str), usize> = entries
         .iter()
@@ -299,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn roadmap_puts_urgent_groups_first_and_nests_children_by_layer() {
+    fn active_puts_urgent_groups_first_and_nests_children_by_layer() {
         let calm = typed("a", Kind::Epic, None);
         let busy = typed("b", Kind::Epic, None);
         let calm_l2 = child("c", &calm, 2, None);
@@ -313,7 +313,7 @@ mod tests {
         ];
         let entries: Vec<(usize, &Issue)> = all.iter().map(|&i| (0, i)).collect();
 
-        let order: Vec<(char, usize)> = roadmap_order(&entries)
+        let order: Vec<(char, usize)> = active_order(&entries)
             .into_iter()
             .map(|p| (all[p.index].title.chars().next().unwrap(), p.depth))
             .collect();
@@ -333,21 +333,21 @@ mod tests {
     }
 
     #[test]
-    fn roadmap_keeps_orphans_and_epics_of_epics_top_level() {
+    fn active_keeps_orphans_and_epics_of_epics_top_level() {
         let missing = typed("a", Kind::Epic, None);
         let orphan = child("b", &missing, 1, None);
         let mut sub = typed("c", Kind::Epic, None);
         sub.epic = Some(orphan.id.clone());
-        let order = roadmap_order(&[(0, &orphan), (0, &sub)]);
+        let order = active_order(&[(0, &orphan), (0, &sub)]);
         assert_eq!(order.len(), 2);
         assert!(order.iter().all(|p| p.depth == 0));
     }
 
     #[test]
-    fn roadmap_does_not_merge_epics_shared_by_clones() {
+    fn active_does_not_merge_epics_shared_by_clones() {
         let epic = typed("a", Kind::Epic, None);
         let kid = child("b", &epic, 1, None);
-        let order = roadmap_order(&[(0, &epic), (0, &kid), (1, &epic), (1, &kid)]);
+        let order = active_order(&[(0, &epic), (0, &kid), (1, &epic), (1, &kid)]);
         let shape: Vec<(usize, usize)> = order.iter().map(|p| (p.index, p.depth)).collect();
         assert_eq!(shape, [(0, 0), (1, 1), (2, 0), (3, 1)]);
     }

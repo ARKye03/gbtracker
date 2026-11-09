@@ -1,4 +1,4 @@
-//! Roadmap Done: finds open issues whose `Refs:` trailer is already on the base branch. Nothing is fetched, so a
+//! Check Done: finds open issues whose `Refs:` trailer is already on the base branch. Nothing is fetched, so a
 //! stale `origin/<base>` only hides work, never invents it. Same rules as the roadmap plugin's `gb merged`.
 
 use std::collections::HashSet;

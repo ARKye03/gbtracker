@@ -197,7 +197,7 @@ fn overflow(app: &App) -> Element<'_, Message> {
             Some(Message::PickFolder(RootKind::Scan))
         ),
         rule(),
-        heading("Roadmap Done"),
+        heading("Check Done"),
     ]
     .spacing(2);
 

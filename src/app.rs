@@ -166,7 +166,7 @@ pub enum DonePhase {
     Closed,
 }
 
-/// The Roadmap Done sheet for one repo. Bugs close first; epics follow once every close has settled.
+/// The Check Done sheet for one repo. Bugs close first; epics follow once every close has settled.
 #[derive(Debug, Clone)]
 pub struct DoneSheet {
     pub root: PathBuf,
@@ -285,7 +285,7 @@ pub struct App {
     pub filter: Filter,
     /// Raw search box content; `filter` only sees it once typing settles.
     pub search: String,
-    pub roadmap: bool,
+    pub active_work: bool,
     /// Status and repo only; the Epics page has no other controls.
     pub epic_filter: Filter,
     pub epics: Vec<EpicSummary>,
@@ -314,7 +314,7 @@ pub struct App {
     pub notifications: Vec<Notification>,
     /// Notifications that arrived while the bell list was closed.
     pub unread: usize,
-    /// Filtered (and, for the roadmap view, ordered) result, recomputed in `update`.
+    /// Filtered (and, for the active-work view, ordered) result, recomputed in `update`.
     pub rows: Vec<Row>,
     pub shown: usize,
     search_seq: u64,
@@ -362,7 +362,7 @@ pub enum Message {
     PickRepo(Option<PathBuf>),
     SearchInput(String),
     SearchSettled(u64),
-    ToggleRoadmap,
+    ToggleActiveWork,
     SetEpicStatus(StatusFilter),
     PickEpicRepo(Option<PathBuf>),
     ToggleEpic(PathBuf, String),
@@ -515,7 +515,7 @@ impl App {
             spin: 0,
             filter: Filter::default(),
             search: String::new(),
-            roadmap: false,
+            active_work: false,
             epic_filter: Filter::default(),
             epics: Vec::new(),
             expanded: HashSet::new(),
@@ -567,12 +567,12 @@ impl App {
             })
             .collect();
 
-        self.rows = if self.roadmap {
+        self.rows = if self.active_work {
             let refs: Vec<(usize, &Issue)> = hits
                 .iter()
                 .map(|&(r, i)| (r, &self.repos[r].issues[i]))
                 .collect();
-            filter::roadmap_order(&refs)
+            filter::active_order(&refs)
                 .into_iter()
                 .map(|p| Row {
                     repo: hits[p.index].0,
@@ -739,7 +739,7 @@ impl App {
             }
             Message::SetStatus(status) => {
                 self.filter.status = status;
-                self.roadmap = false;
+                self.active_work = false;
                 self.apply_filter();
                 Task::none()
             }
@@ -768,9 +768,9 @@ impl App {
                 }
                 Task::none()
             }
-            Message::ToggleRoadmap => {
-                self.roadmap = !self.roadmap;
-                if self.roadmap {
+            Message::ToggleActiveWork => {
+                self.active_work = !self.active_work;
+                if self.active_work {
                     self.filter.status = StatusFilter::Open;
                 }
                 self.apply_filter();
@@ -971,7 +971,7 @@ impl App {
                 self.filter = Filter::default();
                 self.search.clear();
                 self.search_seq += 1;
-                self.roadmap = false;
+                self.active_work = false;
                 self.apply_filter();
                 Task::none()
             }
@@ -1311,7 +1311,7 @@ impl App {
             self.filter = Filter::default();
             self.search.clear();
             self.search_seq += 1;
-            self.roadmap = false;
+            self.active_work = false;
             self.apply_filter();
         }
         let select = self.update(Message::SelectIssue { root, id });
@@ -1454,7 +1454,7 @@ impl App {
     ) -> Task<Message> {
         let outcome = result.as_ref().map(|_| ()).map_err(Clone::clone);
         let closed = matches!(op, WriteOp::Close);
-        // The Roadmap Done summary stands in for the per-issue closes it ran.
+        // The Check Done summary stands in for the per-issue closes it ran.
         let from_done = closed
             && self
                 .done
@@ -1574,7 +1574,7 @@ impl App {
                 let name = sheet.name.clone();
                 self.notify(
                     Tone::Danger,
-                    format!("Roadmap Done failed for {name}"),
+                    format!("Check Done failed for {name}"),
                     Some(msg),
                 );
             }
@@ -1588,7 +1588,7 @@ impl App {
         sheet.phase = DonePhase::Closed;
         let ok = sheet.results.values().filter(|r| r.is_ok()).count();
         let failed = sheet.results.len() - ok;
-        let title = format!("Roadmap Done: {}", sheet.name);
+        let title = format!("Check Done: {}", sheet.name);
         let (tone, detail) = if failed == 0 {
             (Tone::Success, format!("{ok} closed"))
         } else {
@@ -2437,15 +2437,15 @@ mod tests {
     }
 
     #[test]
-    fn roadmap_forces_open_and_status_change_leaves_it() {
+    fn active_work_forces_open_and_status_change_leaves_it() {
         let mut app = loaded(&[("one", Status::Open), ("two", Status::Closed)]);
         app.send(Message::SetStatus(StatusFilter::All));
-        app.send(Message::ToggleRoadmap);
-        assert!(app.roadmap);
+        app.send(Message::ToggleActiveWork);
+        assert!(app.active_work);
         assert_eq!(app.filter.status, StatusFilter::Open);
         assert_eq!(row_titles(&app), ["one"]);
         app.send(Message::SetStatus(StatusFilter::All));
-        assert!(!app.roadmap);
+        assert!(!app.active_work);
     }
 
     #[test]
@@ -2897,7 +2897,7 @@ mod tests {
     }
 
     #[test]
-    fn roadmap_done_reports_once_instead_of_per_close() {
+    fn check_done_reports_once_instead_of_per_close() {
         let mut app = sheet_open();
         let _ = app.update(Message::RunDone);
         app.send(closed('b', Ok(())));
@@ -2909,12 +2909,12 @@ mod tests {
             .collect();
         assert_eq!(
             notes,
-            [(Tone::Danger, "Roadmap Done: a", Some("1 closed, 2 failed"))]
+            [(Tone::Danger, "Check Done: a", Some("1 closed, 2 failed"))]
         );
     }
 
     #[test]
-    fn roadmap_done_that_cannot_read_the_base_is_announced() {
+    fn check_done_that_cannot_read_the_base_is_announced() {
         let mut app = loaded(&[("one", Status::Open)]);
         let _ = app.update(Message::OpenDone(info("a").root));
         let seq = sheet(&app).seq;

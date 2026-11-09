@@ -783,7 +783,7 @@ fn repo_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
     .align_y(Alignment::Center);
     if entry.info.has_git_bug {
         heading = heading.push(choice_button(
-            "Roadmap Done",
+            "Check Done",
             false,
             entry
                 .fingerprint
@@ -871,7 +871,7 @@ fn issues(app: &App) -> Element<'_, Message> {
     } else {
         format!("{} of {total} issues", app.rows.len())
     };
-    let filtered = !app.filter.is_default() || app.roadmap || !app.search.is_empty();
+    let filtered = !app.filter.is_default() || app.active_work || !app.search.is_empty();
 
     let mut header = row![
         text("Issues").size(21),
@@ -883,10 +883,10 @@ fn issues(app: &App) -> Element<'_, Message> {
     if filtered {
         header = header.push(secondary_button("Clear filters", Message::ClearFilters));
     }
-    header = header.push(if app.roadmap {
-        primary_button("Open roadmap", Message::ToggleRoadmap)
+    header = header.push(if app.active_work {
+        primary_button("Active work", Message::ToggleActiveWork)
     } else {
-        secondary_button("Open roadmap", Message::ToggleRoadmap)
+        secondary_button("Active work", Message::ToggleActiveWork)
     });
 
     column![
