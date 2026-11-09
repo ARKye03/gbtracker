@@ -1,1 +1,1 @@
-{"author":{"id":"836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66"},"ops":[{"type":5,"timestamp":1794180724,"nonce":"iWQAM52jLuay/CPHcQlU2l5qpRE=","added":["kind:task","epic:493a53cbe86dbafe9d238f76b8d6a94497506eb975a57cd07ae45b6549cb7a64"],"removed":null}]}
+{"author":{"id":"836d943203cf5a4f01ab5d4b4780de84949c43734f2256a167cc5931ae5d8c66"},"ops":[{"type":5,"timestamp":1794228753,"nonce":"Q1gMy2EoWkOjoHgsVgsZxAm0/pI=","added":["state:in-progress"],"removed":null}]}
