@@ -25,11 +25,11 @@ use gbtracker::filter::{Filter, StateFilter, StatusFilter};
 use gbtracker::gitbug::{Issue, Kind, NewKind, State, Status, WriteOp};
 use gbtracker::workspace::{Root, RootKind, ThemePref};
 
-const SIDEBAR_WIDTH: f32 = 276.0;
-const RAIL_WIDTH: f32 = 64.0;
+const SIDEBAR_WIDTH: f32 = 200.0;
+const RAIL_WIDTH: f32 = 56.0;
 const NAV_BAR_WIDTH: f32 = 3.0;
 const NAV_GAP: f32 = 4.0;
-const NAV_ICON: f32 = 16.0;
+const NAV_ICON: f32 = 20.0;
 const NAV_PAD: f32 = 16.0;
 
 /// Left padding that keeps the nav icon at `NAV_PAD` when expanded and centered in the button at the rail width.
@@ -47,7 +47,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         Section::Epics => epics_page(app),
         Section::Overview => overview(app),
     };
-    let mut body = row![sidebar(app), page].spacing(32).height(Fill);
+    let mut body = row![sidebar(app), page].spacing(20).height(Fill);
     if matches!(app.section, Section::Issues | Section::Epics)
         && let Some(pane) = detail::view(app)
     {

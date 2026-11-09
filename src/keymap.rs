@@ -205,7 +205,7 @@ impl Chord {
         };
         match (self.command, mac) {
             (false, _) => key,
-            (true, true) => format!("⌘{}{key}", if self.shift { "⇧" } else { "" }),
+            (true, true) => format!("⌘+{}{key}", if self.shift { "⇧+" } else { "" }),
             (true, false) => format!("Ctrl+{}{key}", if self.shift { "Shift+" } else { "" }),
         }
     }
@@ -450,14 +450,14 @@ mod tests {
             command: true,
             shift: true,
         };
-        assert_eq!(theme.render(true), "⌘⇧L");
+        assert_eq!(theme.render(true), "⌘+⇧+L");
         assert_eq!(theme.render(false), "Ctrl+Shift+L");
         let search = Chord {
             key: Pressed::Char("k"),
             command: true,
             shift: false,
         };
-        assert_eq!(search.render(true), "⌘K");
+        assert_eq!(search.render(true), "⌘+K");
         assert_eq!(search.render(false), "Ctrl+K");
         let enter = Chord {
             key: Pressed::Named(Named::Enter),
@@ -480,7 +480,7 @@ mod tests {
             .unwrap();
         assert_eq!(help.1, ["?", "Ctrl+/"]);
         let sections = rows(Group::Navigation, true);
-        assert_eq!(sections[0], ("Go to Overview".into(), vec!["⌘1".into()]));
+        assert_eq!(sections[0], ("Go to Overview".into(), vec!["⌘+1".into()]));
     }
 
     #[test]
