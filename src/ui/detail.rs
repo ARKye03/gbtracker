@@ -155,8 +155,7 @@ fn actions<'a>(app: &'a App, pane: &'a DetailPane, issue: &'a Issue) -> Element<
 }
 
 fn write_status<'a>(app: &'a App, pane: &DetailPane, issue: &Issue) -> Element<'a, Message> {
-    let key = (pane.root.clone(), issue.id.clone());
-    if app.pending.contains(&key) {
+    if app.is_pending(&pane.root, &issue.id) {
         return row![
             spinner_dot(app.spin),
             text("Saving…").size(13).style(style::subtle)
@@ -165,7 +164,7 @@ fn write_status<'a>(app: &'a App, pane: &DetailPane, issue: &Issue) -> Element<'
         .align_y(Alignment::Center)
         .into();
     }
-    match app.write_errors.get(&key) {
+    match app.write_errors.get(&pane.root, &issue.id) {
         Some(msg) => text(msg.as_str())
             .size(13)
             .style(style::tone_text(Tone::Danger, false))
@@ -175,11 +174,10 @@ fn write_status<'a>(app: &'a App, pane: &DetailPane, issue: &Issue) -> Element<'
 }
 
 fn comment_box<'a>(app: &'a App, pane: &'a DetailPane) -> Option<Element<'a, Message>> {
-    let key = (pane.root.clone(), pane.summary.id.clone());
-    let draft = app.drafts.get(&key)?;
-    let idle = !app.pending.contains(&key);
+    let (root, id) = (&pane.root, &pane.summary.id);
+    let draft = app.drafts.get(root, id)?;
+    let idle = !app.is_pending(root, id);
     let empty = draft.text().trim().is_empty();
-    let (root, id) = key;
     let mut editor = text_editor(draft)
         .placeholder("Write a comment (markdown)…")
         .height(110)
@@ -192,7 +190,10 @@ fn comment_box<'a>(app: &'a App, pane: &'a DetailPane) -> Option<Element<'a, Mes
             action,
         });
     }
-    let submit = (idle && !empty).then_some(Message::SubmitComment { root, id });
+    let submit = (idle && !empty).then(|| Message::SubmitComment {
+        root: root.clone(),
+        id: id.clone(),
+    });
     Some(section(
         "Add a comment",
         column![editor, primary_button_maybe("Comment", submit)]

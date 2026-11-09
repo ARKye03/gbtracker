@@ -333,8 +333,7 @@ fn epics_page(app: &App) -> Element<'_, Message> {
 fn epic_card<'a>(app: &'a App, summary: &EpicSummary) -> Element<'a, Message> {
     let entry = &app.repos[summary.repo];
     let epic = &entry.issues[summary.epic];
-    let key = (entry.info.root.clone(), epic.id.clone());
-    let expanded = app.expanded.contains(&key);
+    let expanded = app.expanded.contains(&entry.info.root, &epic.id);
 
     let headline = if summary.total == 1 {
         "1 task".to_owned()
@@ -357,7 +356,10 @@ fn epic_card<'a>(app: &'a App, summary: &EpicSummary) -> Element<'a, Message> {
             16.0,
             36.0,
             if expanded { "Collapse" } else { "Expand" },
-            Some(Message::ToggleEpic(key.0, key.1))
+            Some(Message::ToggleEpic(
+                entry.info.root.clone(),
+                epic.id.clone()
+            ))
         ),
     ];
 
@@ -958,9 +960,7 @@ fn issue_row<'a>(app: &'a App, row: &Row) -> Element<'a, Message> {
         .as_ref()
         .is_some_and(|(root, id)| *root == entry.info.root && *id == issue.id);
     let pending = app.is_pending(&entry.info.root, &issue.id);
-    let error = app
-        .write_errors
-        .get(&(entry.info.root.clone(), issue.id.clone()));
+    let error = app.write_errors.get(&entry.info.root, &issue.id);
     let key = (
         &entry.info.root,
         &entry.info.name,

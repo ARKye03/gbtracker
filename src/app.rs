@@ -14,6 +14,7 @@ use gbtracker::filter::{self, Filter, StateFilter, StatusFilter};
 use gbtracker::gitbug::{
     self, GitBugError, Issue, IssueDetail, Kind, NewIssue, NewKind, Status, WriteOp,
 };
+use gbtracker::issue_map::{IssueMap, IssueSet};
 use gbtracker::workspace::{self, RepoInfo, Root, RootKind, ThemePref, Workspace};
 use gbtracker::writes::WriteQueue;
 use iced::animation::{Animation, Easing};
@@ -287,18 +288,18 @@ pub struct App {
     pub epic_filter: Filter,
     pub epics: Vec<EpicSummary>,
     /// Expanded epic cards, keyed by repo root and epic id so they survive reloads.
-    pub expanded: HashSet<(PathBuf, String)>,
+    pub expanded: IssueSet,
     pub detail: Option<DetailPane>,
     /// Keyboard-selected issue; follows clicks, and drives `Enter` and `x`.
     pub cursor: Option<(PathBuf, String)>,
     pub help: bool,
     detail_cache: DetailCache,
     /// Issues with a write in flight, by repo root and id; their actions stay disabled.
-    pub pending: HashSet<(PathBuf, String)>,
+    pub pending: IssueSet,
     /// Last failed write per issue; cleared when the next one starts.
-    pub write_errors: HashMap<(PathBuf, String), String>,
+    pub write_errors: IssueMap<String>,
     /// Unsent comment text per issue, kept across pane switches.
-    pub drafts: HashMap<(PathBuf, String), text_editor::Content>,
+    pub drafts: IssueMap<text_editor::Content>,
     writes: WriteQueue,
     pub done: Option<DoneSheet>,
     done_seq: u64,
@@ -510,14 +511,14 @@ impl App {
             active_work: false,
             epic_filter: Filter::default(),
             epics: Vec::new(),
-            expanded: HashSet::new(),
+            expanded: IssueSet::new(),
             detail: None,
             cursor: None,
             help: false,
             detail_cache: DetailCache::default(),
-            pending: HashSet::new(),
-            write_errors: HashMap::new(),
-            drafts: HashMap::new(),
+            pending: IssueSet::new(),
+            write_errors: IssueMap::new(),
+            drafts: IssueMap::new(),
             writes: WriteQueue::default(),
             done: None,
             done_seq: 0,
@@ -771,9 +772,8 @@ impl App {
                 Task::none()
             }
             Message::ToggleEpic(root, id) => {
-                let key = (root, id);
-                if !self.expanded.remove(&key) {
-                    self.expanded.insert(key);
+                if !self.expanded.remove(&root, &id) {
+                    self.expanded.insert(root, id);
                 }
                 Task::none()
             }
@@ -850,7 +850,7 @@ impl App {
                 result,
             } => self.on_written(root, id, op, result),
             Message::EditComment { root, id, action } => {
-                if let Some(draft) = self.drafts.get_mut(&(root, id)) {
+                if let Some(draft) = self.drafts.get_mut(&root, &id) {
                     draft.perform(action);
                 }
                 Task::none()
@@ -858,12 +858,12 @@ impl App {
             Message::SubmitComment { root, id } => {
                 let body = self
                     .drafts
-                    .get(&(root.clone(), id.clone()))
+                    .get(&root, &id)
                     .map(|d| d.text().trim_end().to_owned())
                     .unwrap_or_default();
                 if body.trim().is_empty() {
                     self.write_errors
-                        .insert((root, id), GitBugError::EmptyComment.to_string());
+                        .insert(root, id, GitBugError::EmptyComment.to_string());
                     return Task::none();
                 }
                 self.start_write(root, id, WriteOp::Comment(body))
@@ -1343,9 +1343,7 @@ impl App {
 
     /// Shows the pane at once from the in-memory summary; fetches only when nothing current is cached or in flight.
     fn open_detail(&mut self, root: PathBuf, issue: Issue) -> Task<Message> {
-        self.drafts
-            .entry((root.clone(), issue.id.clone()))
-            .or_default();
+        self.drafts.ensure(&root, &issue.id);
         let same = self.detail.as_ref().is_some_and(|p| {
             p.is(&root, &issue.id, &issue.edited) && !matches!(p.state, DetailState::Failed(_))
         });
@@ -1388,17 +1386,16 @@ impl App {
     }
 
     pub fn is_pending(&self, root: &Path, id: &str) -> bool {
-        self.pending.iter().any(|(r, i)| r == root && i == id)
+        self.pending.contains(root, id)
     }
 
     /// Queues behind earlier writes to the same repo; other repos and the rest of the UI keep running.
     fn start_write(&mut self, root: PathBuf, id: String, op: WriteOp) -> Task<Message> {
-        let key = (root.clone(), id.clone());
-        if self.pending.contains(&key) {
+        if self.pending.contains(&root, &id) {
             return Task::none();
         }
-        self.write_errors.remove(&key);
-        self.pending.insert(key);
+        self.write_errors.remove(&root, &id);
+        self.pending.insert(root.clone(), id.clone());
         let ticket = self.writes.enter(&root);
         Task::perform(
             async move {
@@ -1452,17 +1449,17 @@ impl App {
         op: WriteOp,
         result: Result<Box<IssueDetail>, String>,
     ) -> Task<Message> {
-        let key = (root.clone(), id.clone());
-        self.pending.remove(&key);
+        self.pending.remove(&root, &id);
         let detail = match result {
             Ok(detail) => *detail,
             Err(msg) => {
-                self.write_errors.insert(key, msg);
+                self.write_errors.insert(root, id, msg);
                 return Task::none();
             }
         };
         if matches!(op, WriteOp::Comment(_)) {
-            self.drafts.insert(key, text_editor::Content::new());
+            self.drafts
+                .insert(root.clone(), id.clone(), text_editor::Content::new());
         }
         let issue = detail.issue.clone();
         let loaded = Rc::new(LoadedDetail::new(detail));
@@ -2470,7 +2467,7 @@ mod tests {
         let mut app = epic_app();
         let (root, id) = (info("a").root, "a".repeat(64));
         app.send(Message::ToggleEpic(root.clone(), id.clone()));
-        assert!(app.expanded.contains(&(root.clone(), id.clone())));
+        assert!(app.expanded.contains(&root, &id));
         app.send(Message::ToggleEpic(root, id));
         assert!(app.expanded.is_empty());
     }
@@ -2656,8 +2653,9 @@ mod tests {
     fn a_write_marks_the_issue_pending_and_rejects_a_second_one() {
         let mut app = loaded(&[("one", Status::Open)]);
         assert_eq!(app.update(write(WriteOp::Close)).units(), 1);
-        assert!(app.pending.contains(&key()));
-        assert!(app.is_pending(&info("a").root, &"a".repeat(64)));
+        let (root, id) = key();
+        assert!(app.pending.contains(&root, &id));
+        assert!(app.is_pending(&root, &id));
         assert_eq!(app.update(write(WriteOp::Close)).units(), 0);
     }
 
@@ -2676,7 +2674,8 @@ mod tests {
         assert!(app.pending.is_empty());
         assert_eq!(app.repos[0].issues, before);
         assert_eq!(row_titles(&app), ["one"]);
-        assert!(app.write_errors[&key()].contains("locked"));
+        let (root, id) = key();
+        assert!(app.write_errors.get(&root, &id).unwrap().contains("locked"));
         assert_eq!(app.detail.as_ref().unwrap().summary, before[0]);
 
         let _ = app.update(write(WriteOp::Close));
@@ -2717,17 +2716,21 @@ mod tests {
             id: "a".repeat(64),
         };
         assert_eq!(app.update(submit()).units(), 0);
-        assert!(app.write_errors[&key()].contains("empty"));
+        let (root, id) = key();
+        assert!(app.write_errors.get(&root, &id).unwrap().contains("empty"));
         assert!(app.pending.is_empty());
 
-        app.drafts
-            .insert(key(), text_editor::Content::with_text("## Hi"));
+        app.drafts.insert(
+            root.clone(),
+            id.clone(),
+            text_editor::Content::with_text("## Hi"),
+        );
         assert_eq!(app.update(submit()).units(), 1);
-        assert!(app.pending.contains(&key()));
+        assert!(app.pending.contains(&root, &id));
 
         let msg = written(&app, WriteOp::Comment("## Hi".into()), |_| {});
         app.send(msg);
-        assert!(app.drafts[&key()].text().trim().is_empty());
+        assert!(app.drafts.get(&root, &id).unwrap().text().trim().is_empty());
     }
 
     fn fail_close(app: &mut App) {
@@ -3092,7 +3095,7 @@ mod tests {
     #[test]
     fn a_row_with_another_write_in_flight_fails_at_once() {
         let mut app = sheet_open();
-        app.pending.insert((info("a").root, done_id('b')));
+        app.pending.insert(info("a").root, done_id('b'));
         assert_eq!(app.update(Message::RunDone).units(), 1);
         assert!(sheet(&app).results[&done_id('b')].is_err());
         assert_eq!(app.update(closed('c', Ok(()))).units(), 0);
