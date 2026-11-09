@@ -70,7 +70,8 @@ pub struct Context {
     /// A widget captured the press, so the user is typing.
     pub typing: bool,
     pub section: Section,
-    pub help_open: bool,
+    /// Help or the Roadmap Done sheet is up; only help and escape resolve.
+    pub modal_open: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -209,7 +210,7 @@ impl Chord {
 
 impl Binding {
     fn applies(&self, key: &Key, mods: Modifiers, ctx: Context) -> bool {
-        if ctx.help_open && !matches!(self.action, Action::Help | Action::Escape) {
+        if ctx.modal_open && !matches!(self.action, Action::Help | Action::Escape) {
             return false;
         }
         if self.scope == Scope::Issues && ctx.section != Section::Issues {
@@ -273,7 +274,7 @@ mod tests {
         Context {
             typing: false,
             section,
-            help_open: false,
+            modal_open: false,
         }
     }
 
@@ -396,7 +397,7 @@ mod tests {
     #[test]
     fn open_help_swallows_everything_but_help_and_escape() {
         let c = Context {
-            help_open: true,
+            modal_open: true,
             ..ctx(Section::Issues)
         };
         assert_eq!(resolve(&ch("j"), Modifiers::NONE, c), None);

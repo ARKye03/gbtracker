@@ -652,7 +652,7 @@ impl App {
                 let ctx = Context {
                     typing,
                     section: self.section,
-                    help_open: self.help,
+                    modal_open: self.help || self.done.is_some(),
                 };
                 match keymap::resolve(&key, modifiers, ctx) {
                     Some(action) => self.perform(action),
