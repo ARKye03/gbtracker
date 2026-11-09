@@ -5,8 +5,8 @@ use iced::{Alignment, Element, Fill, Padding};
 use lucide_iced::icon as lu;
 
 use super::components::{
-    MEDIUM, chip, choice_button, detail_row, icon, primary_button_maybe, secondary_button,
-    skeleton, spinner_dot,
+    MEDIUM, chip, choice_button, detail_row, icon_square_button, primary_button_maybe,
+    secondary_button, skeleton, spinner_dot,
 };
 use super::screen::{kind_label, layer_label, state_badge};
 use crate::app::{App, DetailPane, DetailState, Message};
@@ -27,12 +27,13 @@ pub fn view(app: &App) -> Option<Element<'_, Message>> {
         chip(kind_label(issue.kind.as_ref())),
         text(issue.human_id.as_str()).size(13).style(style::subtle),
         space::horizontal(),
-        button(container(icon(lu::x(), 14.0)).center(Fill))
-            .width(32)
-            .height(32)
-            .padding(0)
-            .style(style::icon_square)
-            .on_press(Message::CloseDetail),
+        icon_square_button(
+            lu::x(),
+            14.0,
+            32.0,
+            "Close details",
+            Some(Message::CloseDetail)
+        ),
     ]
     .spacing(10)
     .align_y(Alignment::Center);

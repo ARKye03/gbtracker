@@ -1,14 +1,13 @@
 //! Roadmap Done review sheet: one checkbox row per candidate with its commits; results tick in as closes finish.
 
 use iced::widget::{
-    button, center, checkbox, column, container, mouse_area, opaque, row, scrollable, space, stack,
-    text,
+    center, checkbox, column, container, mouse_area, opaque, row, scrollable, space, stack, text,
 };
 use iced::{Alignment, Element, Fill};
 use lucide_iced::icon as lu;
 
 use super::components::{
-    MEDIUM, chip, choice_button, icon, secondary_button, skeleton, spinner_dot,
+    MEDIUM, chip, choice_button, icon_square_button, secondary_button, skeleton, spinner_dot,
 };
 use crate::app::{App, DonePhase, DoneSheet, Message};
 use crate::theme::{Tone, style};
@@ -41,12 +40,13 @@ fn card<'a>(app: &'a App, sheet: &'a DoneSheet) -> Element<'a, Message> {
         ]
         .spacing(4),
         space::horizontal(),
-        button(container(icon(lu::x(), 14.0)).center(Fill))
-            .width(32)
-            .height(32)
-            .padding(0)
-            .style(style::icon_square)
-            .on_press_maybe(sheet.can_dismiss().then_some(Message::DismissDone)),
+        icon_square_button(
+            lu::x(),
+            14.0,
+            32.0,
+            "Close",
+            sheet.can_dismiss().then_some(Message::DismissDone)
+        ),
     ]
     .align_y(Alignment::Center);
 

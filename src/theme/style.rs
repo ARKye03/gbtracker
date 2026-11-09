@@ -81,6 +81,28 @@ pub fn chip(theme: &Theme) -> container::Style {
     }
 }
 
+/// Floating tooltip surface; `alpha` drives its fade in and out.
+pub fn tooltip(alpha: f32) -> impl Fn(&Theme) -> container::Style {
+    move |theme| {
+        let t = Tokens::of(theme);
+        container::Style {
+            background: Some(t.surface.scale_alpha(alpha).into()),
+            text_color: Some(t.text.scale_alpha(alpha)),
+            border: Border {
+                color: t.border.scale_alpha(alpha),
+                width: 1.0,
+                radius: radius::MD.into(),
+            },
+            shadow: Shadow {
+                color: t.shadow.scale_alpha(alpha),
+                offset: Vector::new(0.0, 2.0),
+                blur_radius: 10.0,
+            },
+            ..container::Style::default()
+        }
+    }
+}
+
 /// Dims the page behind a modal sheet.
 pub fn scrim(_theme: &Theme) -> container::Style {
     container::Style {

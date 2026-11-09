@@ -9,10 +9,11 @@ use iced::{Alignment, Element, Fill, Padding};
 use lucide_iced::icon as lu;
 
 use super::components::{
-    MEDIUM, card_grid, chip, choice_button, detail_row, dot, icon, icon_muted, icon_pill, labeled,
-    primary_button, secondary_button, skeleton, spinner_dot, split_progress, toggle_chip, top_pill,
-    vdivider,
+    MEDIUM, card_grid, chip, choice_button, detail_row, dot, icon, icon_muted, icon_pill,
+    icon_square_button, labeled, primary_button, secondary_button, skeleton, spinner_dot,
+    split_progress, toggle_chip, top_pill, vdivider,
 };
+use super::tooltip::tip;
 use super::{detail, done};
 use crate::Section;
 use crate::app::{App, LoadState, Message, RepoEntry, Row, ago};
@@ -74,14 +75,14 @@ pub fn view(app: &App) -> Element<'_, Message> {
 }
 
 fn top_bar(app: &App) -> Element<'_, Message> {
-    let theme_icon = match app.workspace.theme {
-        ThemePref::System => lu::monitor(),
-        ThemePref::Light => lu::sun(),
-        ThemePref::Dark => lu::moon(),
+    let (theme_icon, theme_label) = match app.workspace.theme {
+        ThemePref::System => (lu::monitor(), "Theme: System"),
+        ThemePref::Light => (lu::sun(), "Theme: Light"),
+        ThemePref::Dark => (lu::moon(), "Theme: Dark"),
     };
 
     let left = row![
-        icon_pill(lu::panel_left(), Message::ToggleSidebar),
+        icon_pill(lu::panel_left(), "Toggle sidebar", Message::ToggleSidebar),
         top_pill(labeled(lu::search(), "Search"), false, Message::Noop),
         top_pill(labeled(lu::plus(), "New Bug"), false, Message::Noop),
         vdivider(),
@@ -100,7 +101,7 @@ fn top_bar(app: &App) -> Element<'_, Message> {
             false,
             Message::Noop
         ),
-        icon_pill(lu::ellipsis(), Message::Noop),
+        icon_pill(lu::ellipsis(), "More", Message::Noop),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -113,9 +114,9 @@ fn top_bar(app: &App) -> Element<'_, Message> {
 
     let right = row![
         sync,
-        icon_pill(theme_icon, Message::ToggleTheme),
-        icon_pill(lu::message_square(), Message::Noop),
-        icon_pill(lu::bell(), Message::Noop),
+        icon_pill(theme_icon, theme_label, Message::ToggleTheme),
+        icon_pill(lu::message_square(), "Messages", Message::Noop),
+        icon_pill(lu::bell(), "Notifications", Message::Noop),
         container(avatar).center(40),
     ]
     .spacing(8)
@@ -174,33 +175,35 @@ fn sidebar(app: &App) -> Element<'_, Message> {
     // Squared so labels are gone before the narrowing rail clips them.
     let alpha = app.sidebar.interpolate(1.0_f32, 0.0, app.now).powi(2);
     let active = app.section;
+    let collapsed = app.sidebar.value();
     let items = Section::ALL.iter().map(|&s| {
         let (svg, label) = s.meta();
         let is_active = s == active;
+        let nav = button(
+            row![
+                icon(svg, 16.0),
+                text(label)
+                    .size(15)
+                    .wrapping(Wrapping::None)
+                    .style(style::faded(alpha))
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .width(Fill)
+        .padding([12, 16])
+        .style(if is_active {
+            style::nav_item_active
+        } else {
+            style::nav_item
+        })
+        .on_press(Message::Navigate(s));
         row![
             container(space())
                 .width(3)
                 .height(22)
                 .style(style::nav_bar(is_active)),
-            button(
-                row![
-                    icon(svg, 16.0),
-                    text(label)
-                        .size(15)
-                        .wrapping(Wrapping::None)
-                        .style(style::faded(alpha))
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center)
-            )
-            .width(Fill)
-            .padding([12, 16])
-            .style(if is_active {
-                style::nav_item_active
-            } else {
-                style::nav_item
-            })
-            .on_press(Message::Navigate(s))
+            tip(nav, label).enabled(collapsed)
         ]
         .spacing(4)
         .align_y(Alignment::Center)
@@ -357,12 +360,13 @@ fn epic_card<'a>(app: &'a App, summary: &EpicSummary) -> Element<'a, Message> {
             .style(style::list_item)
             .on_press(select(&entry.info.root, epic)),
         space::horizontal(),
-        button(container(icon(chevron, 16.0)).center(Fill))
-            .width(36)
-            .height(36)
-            .padding(0)
-            .style(style::icon_square)
-            .on_press(Message::ToggleEpic(key.0, key.1)),
+        icon_square_button(
+            chevron,
+            16.0,
+            36.0,
+            if expanded { "Collapse" } else { "Expand" },
+            Some(Message::ToggleEpic(key.0, key.1))
+        ),
     ];
 
     let details = column![
@@ -634,12 +638,13 @@ fn root_row(index: usize, root: &Root) -> Element<'_, Message> {
         text(root.path.display().to_string()).size(14),
         chip(kind),
         space::horizontal(),
-        button(container(icon(lu::x(), 14.0)).center(Fill))
-            .width(32)
-            .height(32)
-            .padding(0)
-            .style(style::icon_square)
-            .on_press(Message::RemoveRoot(index)),
+        icon_square_button(
+            lu::x(),
+            14.0,
+            32.0,
+            "Remove folder",
+            Some(Message::RemoveRoot(index))
+        ),
     ]
     .spacing(12)
     .align_y(Alignment::Center)
@@ -1054,24 +1059,24 @@ fn issue_card(
     .style(style::card_button(selected))
     .on_press(select(root, issue));
 
-    let (op, glyph) = if issue.status == Status::Closed {
-        (WriteOp::Reopen, lu::rotate_ccw())
+    let (op, glyph, hint) = if issue.status == Status::Closed {
+        (WriteOp::Reopen, lu::rotate_ccw(), "Reopen issue")
     } else {
-        (WriteOp::Close, lu::circle_check())
+        (WriteOp::Close, lu::circle_check(), "Close issue")
     };
     let toggle: Element<'static, Message> = match pending {
         Some(phase) => container(spinner_dot(phase)).center(36).into(),
-        None => button(container(icon(glyph, 16.0)).center(Fill))
-            .width(36)
-            .height(36)
-            .padding(0)
-            .style(style::icon_square)
-            .on_press(Message::Write {
+        None => icon_square_button(
+            glyph,
+            16.0,
+            36.0,
+            hint,
+            Some(Message::Write {
                 root: root.to_owned(),
                 id: issue.id.clone(),
                 op,
-            })
-            .into(),
+            }),
+        ),
     };
 
     container(row![card, toggle].spacing(8).align_y(Alignment::Center))

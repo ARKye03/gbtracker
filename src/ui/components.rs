@@ -4,6 +4,7 @@ use iced::widget::{Svg, button, column, container, progress_bar, responsive, row
 use iced::{Alignment, Element, Fill, Font, Length, Shrink, font};
 use lucide_iced::icon as lu;
 
+use super::tooltip::tip;
 use crate::theme::{Tone, style};
 
 pub const MEDIUM: Font = Font {
@@ -44,14 +45,35 @@ pub fn top_pill<'a, M: Clone + 'a>(
         .into()
 }
 
-pub fn icon_pill<'a, M: Clone + 'a>(svg: Svg<'a>, on_press: M) -> Element<'a, M> {
-    button(container(icon(svg, 17.0)).center(Fill))
+pub fn icon_pill<'a, M: Clone + 'a>(
+    svg: Svg<'a>,
+    label: impl Into<String>,
+    on_press: M,
+) -> Element<'a, M> {
+    let pill = button(container(icon(svg, 17.0)).center(Fill))
         .width(40)
         .height(40)
         .padding(0)
         .style(style::pill)
-        .on_press(on_press)
-        .into()
+        .on_press(on_press);
+    tip(pill, label).into()
+}
+
+/// Square icon-only button with a tooltip; `None` renders it disabled.
+pub fn icon_square_button<'a, M: Clone + 'a>(
+    svg: Svg<'a>,
+    icon_size: f32,
+    side: f32,
+    label: impl Into<String>,
+    on_press: Option<M>,
+) -> Element<'a, M> {
+    let square = button(container(icon(svg, icon_size)).center(Fill))
+        .width(side)
+        .height(side)
+        .padding(0)
+        .style(style::icon_square)
+        .on_press_maybe(on_press);
+    tip(square, label).into()
 }
 
 pub fn primary_button<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Element<'a, M> {
