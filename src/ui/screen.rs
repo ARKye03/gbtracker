@@ -32,12 +32,22 @@ const NAV_GAP: f32 = 4.0;
 const NAV_ICON: f32 = 20.0;
 const NAV_PAD: f32 = 16.0;
 
+const NAV_SPACING: f32 = 8.0;
+
+fn collapse_progress(width: f32) -> f32 {
+    ((SIDEBAR_WIDTH - width) / (SIDEBAR_WIDTH - RAIL_WIDTH)).clamp(0.0, 1.0)
+}
+
 /// Left padding that keeps the nav icon at `NAV_PAD` when expanded and centered in the button at the rail width.
 fn nav_icon_pad(width: f32) -> f32 {
     let button = RAIL_WIDTH - NAV_BAR_WIDTH - NAV_GAP;
     let centered = (button - NAV_ICON) / 2.0;
-    let collapse = ((SIDEBAR_WIDTH - width) / (SIDEBAR_WIDTH - RAIL_WIDTH)).clamp(0.0, 1.0);
-    NAV_PAD + (centered - NAV_PAD) * collapse
+    NAV_PAD + (centered - NAV_PAD) * collapse_progress(width)
+}
+
+/// Icon/label gap shrinks to zero at the rail: iced's row subtracts spacing from the width available to the icon, so a fixed gap squeezes it.
+fn nav_spacing(width: f32) -> f32 {
+    NAV_SPACING * (1.0 - collapse_progress(width))
 }
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -220,6 +230,7 @@ fn sidebar(app: &App) -> Element<'_, Message> {
     let active = app.section;
     let collapsed = app.sidebar.value();
     let pad = nav_icon_pad(width);
+    let spacing = nav_spacing(width);
     let items = Section::ALL.iter().map(|&s| {
         let (svg, label) = s.meta();
         let is_active = s == active;
@@ -231,7 +242,7 @@ fn sidebar(app: &App) -> Element<'_, Message> {
                     .wrapping(Wrapping::None)
                     .style(style::faded(alpha))
             ]
-            .spacing(8)
+            .spacing(spacing)
             .align_y(Alignment::Center),
         )
         .width(Fill)
@@ -1132,6 +1143,18 @@ mod tests {
         let button = RAIL_WIDTH - NAV_BAR_WIDTH - NAV_GAP;
         let icon_center = nav_icon_pad(RAIL_WIDTH) + NAV_ICON / 2.0;
         assert!((icon_center - button / 2.0).abs() <= 0.5);
+    }
+
+    #[test]
+    fn nav_icon_is_never_squeezed_while_collapsing() {
+        for i in 0..=20_u8 {
+            let width = RAIL_WIDTH + (SIDEBAR_WIDTH - RAIL_WIDTH) * f32::from(i) / 20.0;
+            let content = width - NAV_BAR_WIDTH - NAV_GAP - 2.0 * nav_icon_pad(width);
+            assert!(
+                content - nav_spacing(width) >= NAV_ICON - 1e-3,
+                "width {width}"
+            );
+        }
     }
 
     #[test]
