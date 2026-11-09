@@ -223,7 +223,8 @@ impl Binding {
         if self.scope == Scope::Issues && ctx.section != Section::Issues {
             return false;
         }
-        if !self.chord.command && ctx.typing {
+        let closes_modal = ctx.modal_open && self.action == Action::Escape;
+        if !self.chord.command && ctx.typing && !closes_modal {
             return false;
         }
         self.chord.matches(key, mods)

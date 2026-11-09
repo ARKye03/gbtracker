@@ -1194,14 +1194,24 @@ impl App {
 
     /// Queues behind earlier writes to the repo; the form stays up, locked, until the result arrives.
     fn submit_new_issue(&mut self) -> Task<Message> {
+        let epic = self
+            .new_issue
+            .as_ref()
+            .filter(|f| !f.submitting)
+            .and_then(|f| {
+                f.epic
+                    .clone()
+                    .filter(|id| self.open_epics(&f.root).iter().any(|i| i.id == *id))
+            });
         let Some(form) = self.new_issue.as_mut().filter(|f| !f.submitting) else {
             return Task::none();
         };
+        form.epic = epic.clone();
         let new = NewIssue {
             kind: form.kind,
             title: form.title.trim().to_owned(),
             body: form.body.text().trim_end().to_owned(),
-            epic: form.epic.clone(),
+            epic,
         };
         if new.title.is_empty() {
             form.error = Some(GitBugError::EmptyTitle.to_string());
@@ -1233,14 +1243,26 @@ impl App {
         let detail = match result {
             Ok(detail) => *detail,
             Err(msg) => {
-                if let Some(form) = self.new_issue.as_mut().filter(|f| f.root == root) {
-                    form.submitting = false;
-                    form.error = Some(msg);
+                match self
+                    .new_issue
+                    .as_mut()
+                    .filter(|f| f.root == root && f.submitting)
+                {
+                    Some(form) => {
+                        form.submitting = false;
+                        form.error = Some(msg);
+                    }
+                    None => self.notify(Tone::Danger, "Could not create issue", Some(msg)),
                 }
-                return Task::none();
+                // A partly applied create (bug written, labels failed) still shows up in the list.
+                return self.check_tracked();
             }
         };
-        if self.new_issue.as_ref().is_some_and(|f| f.root == root) {
+        if self
+            .new_issue
+            .as_ref()
+            .is_some_and(|f| f.root == root && f.submitting)
+        {
             self.new_issue = None;
         }
         let issue = detail.issue.clone();
@@ -3450,6 +3472,14 @@ mod tests {
         tap(&mut app, "j");
         assert!(app.cursor.is_none());
         escape(&mut app, false);
+        assert!(app.new_issue.is_none());
+    }
+
+    #[test]
+    fn escape_closes_the_dialog_even_from_a_focused_field() {
+        let mut app = numbered(1);
+        cmd(&mut app, "n");
+        escape(&mut app, true);
         assert!(app.new_issue.is_none());
     }
 
