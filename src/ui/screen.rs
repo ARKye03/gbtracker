@@ -237,7 +237,7 @@ fn sidebar(app: &App) -> Element<'_, Message> {
         .width(Fill)
         .padding(Padding {
             top: 8.0,
-            right: NAV_PAD,
+            right: pad,
             bottom: 8.0,
             left: pad,
         })
