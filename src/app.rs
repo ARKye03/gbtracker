@@ -514,6 +514,11 @@ impl App {
     fn apply_filter(&mut self) {
         self.shown = PAGE_SIZE;
         self.refilter();
+        if let Some(at) = self.cursor_index() {
+            while at >= self.shown {
+                self.shown += PAGE_SIZE;
+            }
+        }
     }
 
     pub fn total_issues(&self) -> usize {
@@ -584,7 +589,12 @@ impl App {
                 self.section = Section::Issues;
                 operation::focus(SEARCH_ID)
             }
-            Message::OpenCursor => self.open_cursor(),
+            Message::OpenCursor => {
+                self.filter.set_text(&self.search);
+                self.apply_filter();
+                self.cursor = None;
+                self.open_cursor()
+            }
             Message::ToggleHelp => {
                 self.help = !self.help;
                 Task::none()
@@ -837,7 +847,6 @@ impl App {
         }
     }
 
-    /// Shows the pane at once from the in-memory summary; fetches only when nothing current is cached or in flight.
     fn perform(&mut self, action: Action) -> Task<Message> {
         match action {
             Action::Goto(section) => self.update(Message::Navigate(section)),
@@ -920,6 +929,7 @@ impl App {
         self.start_write(root, issue.id, op)
     }
 
+    /// Shows the pane at once from the in-memory summary; fetches only when nothing current is cached or in flight.
     fn open_detail(&mut self, root: PathBuf, issue: Issue) -> Task<Message> {
         self.drafts
             .entry((root.clone(), issue.id.clone()))
@@ -2659,6 +2669,17 @@ mod tests {
     #[test]
     fn submitting_the_search_opens_the_first_result() {
         let mut app = numbered(3);
+        app.send(Message::OpenCursor);
+        assert_eq!(detail_title(&app), Some("issue 0"));
+    }
+
+    #[test]
+    fn submitting_the_search_ignores_a_stale_cursor() {
+        let mut app = numbered(3);
+        tap(&mut app, "j");
+        tap(&mut app, "j");
+        tap(&mut app, "j");
+        app.search = "issue".into();
         app.send(Message::OpenCursor);
         assert_eq!(detail_title(&app), Some("issue 0"));
     }
