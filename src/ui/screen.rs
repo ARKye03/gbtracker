@@ -683,7 +683,9 @@ fn repo_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
     ]
     .spacing(16)
     .align_y(Alignment::Center);
-    if entry.fingerprint.is_some() {
+    if entry.fingerprint.is_some()
+        && !matches!(entry.state, LoadState::Error(_) | LoadState::NoGitBug)
+    {
         heading = heading.push(
             text(format!("{} open", entry.open_count()))
                 .size(13)
