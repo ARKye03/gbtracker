@@ -3,6 +3,14 @@ name = "gbtracker"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata.bundle]
+name = "GBTracker"
+identifier = "com.arkye03.gbtracker"
+icon = ["assets/icon.icns"]
+category = "public.app-category.developer-tools"
+short_description = "Desktop tracker for git-bug issues"
+osx_minimum_system_version = "11.0"
+
 [dependencies]
 directories = "6.0.0"
 iced = { version = "0.14", features = ["svg", "advanced", "tokio", "lazy", "markdown"] }

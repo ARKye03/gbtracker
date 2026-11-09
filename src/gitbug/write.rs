@@ -544,7 +544,7 @@ mod tests {
     }
 
     async fn git_bug_available() -> bool {
-        let found = tokio::process::Command::new("git-bug")
+        let found = tokio::process::Command::new(cli::git_bug())
             .arg("version")
             .output()
             .await
