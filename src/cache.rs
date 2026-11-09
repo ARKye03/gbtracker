@@ -35,6 +35,19 @@ struct IssuesFile {
     issues: Vec<Issue>,
 }
 
+#[derive(Serialize)]
+struct ReposFileRef<'a> {
+    version: u32,
+    repos: &'a [RepoInfo],
+}
+
+#[derive(Serialize)]
+struct IssuesFileRef<'a> {
+    version: u32,
+    fingerprint: &'a str,
+    issues: &'a [Issue],
+}
+
 /// FNV-1a: stable across runs and Rust versions, unlike `DefaultHasher`.
 fn hash_hex(bytes: &[u8]) -> String {
     let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, &b| {
@@ -108,9 +121,9 @@ impl Cache {
     }
 
     pub fn save_repos(&self, repos: &[RepoInfo]) -> io::Result<()> {
-        let file = ReposFile {
+        let file = ReposFileRef {
             version: VERSION,
-            repos: repos.to_vec(),
+            repos,
         };
         atomic_write(&self.repos_path(), &serde_json::to_vec(&file)?)
     }
@@ -121,10 +134,10 @@ impl Cache {
         fingerprint: &str,
         issues: &[Issue],
     ) -> io::Result<()> {
-        let file = IssuesFile {
+        let file = IssuesFileRef {
             version: VERSION,
-            fingerprint: fingerprint.to_owned(),
-            issues: issues.to_vec(),
+            fingerprint,
+            issues,
         };
         atomic_write(&self.issues_path(repo), &serde_json::to_vec(&file)?)
     }

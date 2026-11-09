@@ -16,7 +16,7 @@ use gbtracker::gitbug::{
 };
 use gbtracker::issue_map::{IssueMap, IssueSet};
 use gbtracker::workspace::{self, RepoInfo, Root, RootKind, ThemePref, Workspace};
-use gbtracker::writes::WriteQueue;
+use gbtracker::writes::{WriteQueue, run_ordered};
 use iced::animation::{Animation, Easing};
 use iced::keyboard::{self, Key, Modifiers};
 use iced::theme::Mode as SystemMode;
@@ -301,6 +301,8 @@ pub struct App {
     /// Unsent comment text per issue, kept across pane switches.
     pub drafts: IssueMap<text_editor::Content>,
     writes: WriteQueue,
+    /// Orders disk saves per file: one lane each for the workspace config, the repo list, and every repo's issues.
+    persists: WriteQueue,
     pub done: Option<DoneSheet>,
     done_seq: u64,
     pub new_issue: Option<NewIssueForm>,
@@ -520,6 +522,7 @@ impl App {
             write_errors: IssueMap::new(),
             drafts: IssueMap::new(),
             writes: WriteQueue::default(),
+            persists: WriteQueue::default(),
             done: None,
             done_seq: 0,
             new_issue: None,
@@ -1900,23 +1903,29 @@ impl App {
         )
     }
 
-    fn persist_workspace(&self) -> Task<Message> {
+    fn persist_workspace(&mut self) -> Task<Message> {
         if self.config_locked {
             return Task::none();
         }
         let workspace = self.workspace.clone();
-        blocking(move || workspace.save().map_err(|e| e.to_string()))
+        let ticket = self.persists.enter(Path::new("workspace"));
+        persisted(run_ordered(ticket, move || {
+            workspace.save().map_err(|e| e.to_string())
+        }))
     }
 
-    fn persist_repos(&self, repos: Vec<RepoInfo>) -> Task<Message> {
+    fn persist_repos(&mut self, repos: Vec<RepoInfo>) -> Task<Message> {
         let Some(cache) = self.cache.clone() else {
             return Task::none();
         };
-        blocking(move || cache.save_repos(&repos).map_err(|e| e.to_string()))
+        let ticket = self.persists.enter(Path::new("repos"));
+        persisted(run_ordered(ticket, move || {
+            cache.save_repos(&repos).map_err(|e| e.to_string())
+        }))
     }
 
     fn persist_issues(
-        &self,
+        &mut self,
         info: RepoInfo,
         fingerprint: String,
         issues: Vec<Issue>,
@@ -1924,11 +1933,12 @@ impl App {
         let Some(cache) = self.cache.clone() else {
             return Task::none();
         };
-        blocking(move || {
+        let ticket = self.persists.enter(&info.root);
+        persisted(run_ordered(ticket, move || {
             cache
                 .save_issues(&info, &fingerprint, &issues)
                 .map_err(|e| e.to_string())
-        })
+        }))
     }
 
     pub fn is_busy(&self) -> bool {
@@ -2006,15 +2016,8 @@ impl App {
     }
 }
 
-fn blocking(job: impl FnOnce() -> Result<(), String> + Send + 'static) -> Task<Message> {
-    Task::perform(
-        async move {
-            tokio::task::spawn_blocking(job)
-                .await
-                .unwrap_or_else(|e| Err(e.to_string()))
-        },
-        Message::Persisted,
-    )
+fn persisted(job: impl Future<Output = Result<(), String>> + Send + 'static) -> Task<Message> {
+    Task::perform(job, Message::Persisted)
 }
 
 /// "just now", "5m ago", "3h ago", "2d ago".

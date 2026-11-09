@@ -55,6 +55,17 @@ impl WriteQueue {
     }
 }
 
+/// Waits for `ticket`'s turn, then runs `job` on a blocking thread; the ticket is held until the job ends.
+pub async fn run_ordered(
+    ticket: Ticket,
+    job: impl FnOnce() -> Result<(), String> + Send + 'static,
+) -> Result<(), String> {
+    ticket.turn().await;
+    tokio::task::spawn_blocking(job)
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()))
+}
+
 /// Dropping it, finished or not, lets the next ticket in line go.
 pub struct Ticket {
     lane: Arc<Lane>,
@@ -111,6 +122,30 @@ mod tests {
             .flat_map(|n| [format!("start {n}"), format!("end {n}")])
             .collect();
         assert_eq!(*log.lock().unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn delayed_earlier_persist_cannot_overwrite_a_later_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("out.json");
+        let mut queue = WriteQueue::default();
+        let key = Path::new("workspace");
+        let first = queue.enter(key);
+        let second = queue.enter(key);
+
+        let write = |body: &'static str, delay: u64| {
+            let file = file.clone();
+            move || {
+                std::thread::sleep(Duration::from_millis(delay));
+                std::fs::write(&file, body).map_err(|e| e.to_string())
+            }
+        };
+        let later = tokio::spawn(run_ordered(second, write("B", 0)));
+        let earlier = tokio::spawn(run_ordered(first, write("A", 80)));
+        earlier.await.unwrap().unwrap();
+        later.await.unwrap().unwrap();
+
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "B");
     }
 
     #[tokio::test]
