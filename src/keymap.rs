@@ -51,7 +51,7 @@ impl Action {
             Action::Open => "Open issue details".into(),
             Action::ToggleStatus => "Close or reopen issue".into(),
             Action::Help => "Show keyboard shortcuts".into(),
-            Action::Escape => "Close shortcuts, then details".into(),
+            Action::Escape => "Close shortcuts or menu, then details".into(),
         }
     }
 

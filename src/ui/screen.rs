@@ -2,8 +2,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use iced::widget::{
-    button, column, container, lazy, pick_list, row, scrollable, space, text, text::Wrapping,
-    text_input,
+    button, column, container, lazy, pick_list, row, scrollable, space, stack, text,
+    text::Wrapping, text_input,
 };
 use iced::{Alignment, Element, Fill, Padding};
 use lucide_iced::icon as lu;
@@ -11,12 +11,14 @@ use lucide_iced::icon as lu;
 use super::components::{
     MEDIUM, card_grid, chip, choice_button, detail_row, dot, icon, icon_muted, icon_pill,
     icon_pill_hint, icon_square_button, icon_square_button_hint, labeled, primary_button,
-    secondary_button, skeleton, spinner_dot, split_progress, toggle_chip, top_pill, vdivider,
+    secondary_button, skeleton, spinner_dot, split_progress, toggle_chip, top_pill, top_pill_maybe,
+    vdivider,
 };
+use super::popover::{self, Align};
 use super::tooltip::tip;
 use super::{detail, done, shortcuts};
 use crate::Section;
-use crate::app::{App, LIST_ID, LoadState, Message, RepoEntry, Row, SEARCH_ID, ago};
+use crate::app::{App, LIST_ID, LoadState, Message, Popover, RepoEntry, Row, SEARCH_ID, ago};
 use crate::keymap::{self, Action};
 use crate::theme::{Tone, style};
 use gbtracker::epics::{self, EpicSummary};
@@ -68,11 +70,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .height(Fill)
     .style(style::app);
 
-    let page = if app.section == Section::Repositories {
-        done::overlay(app, page.into())
-    } else {
-        page.into()
-    };
+    let page = popover::scrim(app, done::overlay(app, page.into()));
     shortcuts::overlay(app, page)
 }
 
@@ -95,33 +93,75 @@ fn top_bar(app: &App) -> Element<'_, Message> {
             "Search"
         )
         .shortcut_maybe(keymap::hint(Action::FocusSearch)),
-        top_pill(labeled(lu::plus(), "New Bug"), false, Message::Noop),
+        tip(
+            top_pill_maybe(labeled(lu::plus(), "New Bug"), false, None),
+            "Not available yet"
+        ),
         vdivider(),
         top_pill(
             labeled(lu::folder_git_2(), "Repositories"),
             app.section == Section::Repositories,
             Message::Navigate(Section::Repositories)
         ),
-        top_pill(
-            row![
-                icon(lu::git_branch(), 16.0),
-                text(workspace_summary(app)).size(15)
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-            false,
-            Message::Noop
+        popover::anchored(
+            app,
+            Popover::Repos,
+            Align::Start,
+            top_pill(
+                row![
+                    icon(lu::git_branch(), 16.0),
+                    text(workspace_summary(app)).size(15)
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+                app.open_popover == Some(Popover::Repos),
+                Message::TogglePopover(Popover::Repos)
+            )
         ),
-        icon_pill(lu::ellipsis(), "More", Message::Noop),
+        popover::anchored(
+            app,
+            Popover::Overflow,
+            Align::Start,
+            icon_pill(
+                lu::ellipsis(),
+                "More",
+                Message::TogglePopover(Popover::Overflow)
+            )
+        ),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
 
     let sync = sync_pill(app);
 
-    let avatar = container(text(app.initials.as_str()).size(13).font(MEDIUM))
-        .center(32)
-        .style(style::avatar);
+    let avatar = tip(
+        button(
+            container(text(app.initials.as_str()).size(13).font(MEDIUM))
+                .center(32)
+                .style(style::avatar),
+        )
+        .padding(4)
+        .style(style::list_item)
+        .on_press(Message::TogglePopover(Popover::Identity)),
+        "Account",
+    );
+
+    let bell = icon_pill(
+        lu::bell(),
+        "Notifications",
+        Message::TogglePopover(Popover::Notifications),
+    );
+    let bell: Element<'_, Message> = if app.unread > 0 {
+        stack![
+            bell,
+            container(unread_badge(app.unread))
+                .align_top(Fill)
+                .align_right(Fill)
+        ]
+        .into()
+    } else {
+        bell
+    };
 
     let right = row![
         sync,
@@ -137,15 +177,26 @@ fn top_bar(app: &App) -> Element<'_, Message> {
             keymap::hint(Action::CycleTheme),
             Message::ToggleTheme
         ),
-        icon_pill(lu::message_square(), "Messages", Message::Noop),
-        icon_pill(lu::bell(), "Notifications", Message::Noop),
-        container(avatar).center(40),
+        popover::anchored(app, Popover::Notifications, Align::End, bell),
+        popover::anchored(app, Popover::Identity, Align::End, avatar),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
 
     row![left, space::horizontal(), right]
         .align_y(Alignment::Center)
+        .into()
+}
+
+fn unread_badge(count: usize) -> Element<'static, Message> {
+    let label = if count > 99 {
+        "99+".to_owned()
+    } else {
+        count.to_string()
+    };
+    container(text(label).size(10).font(MEDIUM))
+        .padding([1, 5])
+        .style(style::badge)
         .into()
 }
 
@@ -675,7 +726,7 @@ fn root_row(index: usize, root: &Root) -> Element<'_, Message> {
     .into()
 }
 
-fn status_label(state: &LoadState) -> (&'static str, Option<Tone>) {
+pub(super) fn status_label(state: &LoadState) -> (&'static str, Option<Tone>) {
     match state {
         LoadState::Cached => ("Cached", Some(Tone::Warning)),
         LoadState::Loading => ("Loading", None),
@@ -687,9 +738,8 @@ fn status_label(state: &LoadState) -> (&'static str, Option<Tone>) {
     }
 }
 
-fn status_badge(state: &LoadState, spin: usize) -> Element<'static, Message> {
-    let (label, tone) = status_label(state);
-    let indicator: Element<'static, Message> = match (state.is_busy(), tone) {
+pub(super) fn status_indicator(state: &LoadState, spin: usize) -> Element<'static, Message> {
+    match (state.is_busy(), status_label(state).1) {
         (true, _) => spinner_dot(spin),
         (false, Some(tone)) => dot(tone, 10.0),
         (false, None) => container(space())
@@ -697,11 +747,18 @@ fn status_badge(state: &LoadState, spin: usize) -> Element<'static, Message> {
             .height(10)
             .style(style::neutral_dot)
             .into(),
-    };
-    row![indicator, text(label).size(13).style(style::subtle)]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .into()
+    }
+}
+
+fn status_badge(state: &LoadState, spin: usize) -> Element<'static, Message> {
+    let (label, _) = status_label(state);
+    row![
+        status_indicator(state, spin),
+        text(label).size(13).style(style::subtle)
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into()
 }
 
 fn repo_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {

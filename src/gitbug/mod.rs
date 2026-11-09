@@ -268,10 +268,20 @@ pub async fn show(root: &Path, full_id: &str) -> Result<IssueDetail, GitBugError
     Ok(detail)
 }
 
-/// Name of the identity git-bug acts as in `root`.
-pub async fn current_user(root: &Path) -> Result<String, GitBugError> {
-    let out = cli::run(root, &["user", "show", "--field", "name"]).await?;
-    Ok(out.trim().to_owned())
+/// The identity git-bug acts as in a repo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub name: String,
+    pub email: String,
+}
+
+pub async fn current_identity(root: &Path) -> Result<Identity, GitBugError> {
+    let name = cli::run(root, &["user", "show", "--field", "name"]).await?;
+    let email = cli::run(root, &["user", "show", "--field", "email"]).await?;
+    Ok(Identity {
+        name: name.trim().to_owned(),
+        email: email.trim().to_owned(),
+    })
 }
 
 /// Up to two letters: first letters of the first two words, or the first two letters of a single word.

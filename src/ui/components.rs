@@ -33,6 +33,15 @@ pub fn top_pill<'a, M: Clone + 'a>(
     active: bool,
     on_press: M,
 ) -> Element<'a, M> {
+    top_pill_maybe(content, active, Some(on_press))
+}
+
+/// `None` renders it disabled.
+pub fn top_pill_maybe<'a, M: Clone + 'a>(
+    content: impl Into<Element<'a, M>>,
+    active: bool,
+    on_press: Option<M>,
+) -> Element<'a, M> {
     button(container(content).center_y(Fill))
         .height(40)
         .padding([0, 14])
@@ -41,7 +50,7 @@ pub fn top_pill<'a, M: Clone + 'a>(
         } else {
             style::pill
         })
-        .on_press(on_press)
+        .on_press_maybe(on_press)
         .into()
 }
 

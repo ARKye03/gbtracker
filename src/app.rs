@@ -11,7 +11,7 @@ use gbtracker::detail::{DetailCache, LoadedDetail};
 use gbtracker::done::{self, EpicCandidate, Report};
 use gbtracker::epics::{self, EpicSummary};
 use gbtracker::filter::{self, Filter, StateFilter, StatusFilter};
-use gbtracker::gitbug::{self, GitBugError, Issue, IssueDetail, Kind, Status, WriteOp};
+use gbtracker::gitbug::{self, GitBugError, Identity, Issue, IssueDetail, Kind, Status, WriteOp};
 use gbtracker::workspace::{self, RepoInfo, Root, RootKind, ThemePref, Workspace};
 use gbtracker::writes::WriteQueue;
 use iced::animation::{Animation, Easing};
@@ -24,9 +24,10 @@ use iced::{Element, Subscription, Task, Theme, clipboard, event, time, window};
 use tokio::sync::Semaphore;
 
 use crate::keymap::{self, Action, Context};
-use crate::theme::Mode;
+use crate::theme::{Mode, Tone};
 use crate::{Section, ui};
 
+const MAX_NOTIFICATIONS: usize = 100;
 const MAX_CONCURRENT: usize = 4;
 const TRACK_EVERY: Duration = Duration::from_secs(5);
 const SPIN_EVERY: Duration = Duration::from_millis(250);
@@ -221,6 +222,23 @@ impl DoneSheet {
     }
 }
 
+/// The top-bar popover that is open; at most one at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Popover {
+    Repos,
+    Overflow,
+    Notifications,
+    Identity,
+}
+
+#[derive(Debug, Clone)]
+pub struct Notification {
+    pub tone: Tone,
+    pub title: String,
+    pub detail: Option<String>,
+    pub at: SystemTime,
+}
+
 pub struct App {
     pub system: SystemMode,
     theme_override: Option<Mode>,
@@ -259,7 +277,13 @@ pub struct App {
     pub done: Option<DoneSheet>,
     done_seq: u64,
     pub initials: String,
+    pub identity: Option<Identity>,
     identity_asked: bool,
+    pub open_popover: Option<Popover>,
+    /// Oldest first, capped at `MAX_NOTIFICATIONS`.
+    pub notifications: Vec<Notification>,
+    /// Notifications that arrived while the bell list was closed.
+    pub unread: usize,
     /// Filtered (and, for the roadmap view, ordered) result, recomputed in `update`.
     pub rows: Vec<Row>,
     pub shown: usize,
@@ -338,7 +362,12 @@ pub enum Message {
     PickDone(bool),
     RunDone,
     DismissDone,
-    Identified(Option<String>),
+    Identified(Option<Identity>),
+    TogglePopover(Popover),
+    ClosePopover,
+    ChooseRepo(Option<PathBuf>),
+    SetTheme(ThemePref),
+    ClearNotifications,
     ClearFilters,
     ShowMore,
     Discovered {
@@ -377,7 +406,7 @@ impl App {
         let mut app = Self::from_parts(workspace, snapshot.unwrap_or_default(), cache);
         if let Some(e) = config_error {
             app.config_locked = true;
-            app.notice = Some(format!("{e} — changes will not be saved"));
+            app.set_notice(format!("{e} — changes will not be saved"));
         }
         if let Ok(theme) = std::env::var("GBTRACKER_THEME") {
             app.theme_override = Some(if theme == "dark" {
@@ -444,7 +473,11 @@ impl App {
             done: None,
             done_seq: 0,
             initials: "?".to_owned(),
+            identity: None,
             identity_asked: false,
+            open_popover: None,
+            notifications: Vec::new(),
+            unread: 0,
             rows: Vec::new(),
             shown: PAGE_SIZE,
             search_seq: 0,
@@ -544,11 +577,52 @@ impl App {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        if matches!(
+            message,
+            Message::Navigate(_)
+                | Message::FocusSearch
+                | Message::ToggleHelp
+                | Message::OpenDone(_)
+                | Message::Rescan
+                | Message::PickFolder(_)
+                | Message::ChooseRepo(_)
+        ) {
+            self.open_popover = None;
+        }
         match message {
             Message::ToggleTheme => {
+                let next = self.workspace.theme.next();
+                self.update(Message::SetTheme(next))
+            }
+            Message::SetTheme(pref) => {
                 self.theme_override = None;
-                self.workspace.theme = self.workspace.theme.next();
+                self.workspace.theme = pref;
                 self.persist_workspace()
+            }
+            Message::TogglePopover(popover) => {
+                if self.open_popover == Some(popover) {
+                    self.open_popover = None;
+                } else {
+                    self.open_popover = Some(popover);
+                    if popover == Popover::Notifications {
+                        self.unread = 0;
+                    }
+                }
+                Task::none()
+            }
+            Message::ClosePopover => {
+                self.open_popover = None;
+                Task::none()
+            }
+            Message::ChooseRepo(root) => {
+                self.pick_repo(root);
+                self.section = Section::Issues;
+                Task::none()
+            }
+            Message::ClearNotifications => {
+                self.notifications.clear();
+                self.unread = 0;
+                Task::none()
             }
             Message::SystemTheme(mode) => {
                 self.system = mode;
@@ -616,9 +690,7 @@ impl App {
                 Task::none()
             }
             Message::PickRepo(root) => {
-                self.filter.repos.clear();
-                self.filter.repos.extend(root);
-                self.apply_filter();
+                self.pick_repo(root);
                 Task::none()
             }
             Message::SearchInput(text) => {
@@ -679,6 +751,9 @@ impl App {
             Message::CloseDetail => {
                 if self.help {
                     self.help = false;
+                    return Task::none();
+                }
+                if self.open_popover.take().is_some() {
                     return Task::none();
                 }
                 match &self.done {
@@ -775,9 +850,12 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Identified(name) => {
-                match name.as_deref().map(gitbug::initials) {
-                    Some(initials) => self.initials = initials,
+            Message::Identified(identity) => {
+                match identity {
+                    Some(identity) => {
+                        self.initials = gitbug::initials(&identity.name);
+                        self.identity = Some(identity);
+                    }
                     None => self.identity_asked = false,
                 }
                 Task::none()
@@ -808,7 +886,7 @@ impl App {
             } => self.on_loaded(epoch, root, fingerprint, result),
             Message::Persisted(result) => {
                 if let Err(e) = result {
-                    self.notice = Some(format!("save failed: {e}"));
+                    self.set_notice(format!("save failed: {e}"));
                 }
                 Task::none()
             }
@@ -843,6 +921,73 @@ impl App {
             Message::Spin => {
                 self.spin = self.spin.wrapping_add(1);
                 Task::none()
+            }
+        }
+    }
+
+    fn pick_repo(&mut self, root: Option<PathBuf>) {
+        self.filter.repos.clear();
+        self.filter.repos.extend(root);
+        self.apply_filter();
+    }
+
+    fn notify(&mut self, tone: Tone, title: impl Into<String>, detail: Option<String>) {
+        self.notifications.push(Notification {
+            tone,
+            title: title.into(),
+            detail,
+            at: SystemTime::now(),
+        });
+        if self.notifications.len() > MAX_NOTIFICATIONS {
+            self.notifications.remove(0);
+        }
+        if self.open_popover != Some(Popover::Notifications) {
+            self.unread += 1;
+        }
+        self.unread = self.unread.min(self.notifications.len());
+    }
+
+    fn set_notice(&mut self, notice: String) {
+        self.notify(Tone::Warning, notice.clone(), None);
+        self.notice = Some(notice);
+    }
+
+    fn issue_ref(&self, root: &Path, id: &str) -> (String, Option<String>) {
+        let found = self
+            .repos
+            .iter()
+            .find(|e| e.info.root == root)
+            .and_then(|e| e.issues.iter().find(|i| i.id == id));
+        match found {
+            Some(issue) => (issue.human_id.clone(), Some(issue.title.clone())),
+            None => (id.chars().take(7).collect(), None),
+        }
+    }
+
+    fn notify_write(&mut self, root: &Path, id: &str, op: &WriteOp, outcome: &Result<(), String>) {
+        let (hid, title) = self.issue_ref(root, id);
+        match outcome {
+            Ok(()) => {
+                let verb = match op {
+                    WriteOp::Close => "Closed",
+                    WriteOp::Reopen => "Reopened",
+                    WriteOp::State(_) => "Changed state of",
+                    WriteOp::Comment(_) => "Commented on",
+                };
+                self.notify(Tone::Success, format!("{verb} {hid}"), title);
+            }
+            Err(msg) => {
+                let verb = match op {
+                    WriteOp::Close => "close",
+                    WriteOp::Reopen => "reopen",
+                    WriteOp::State(_) => "change the state of",
+                    WriteOp::Comment(_) => "comment on",
+                };
+                self.notify(
+                    Tone::Danger,
+                    format!("Could not {verb} {hid}"),
+                    Some(msg.clone()),
+                );
             }
         }
     }
@@ -1015,6 +1160,15 @@ impl App {
     ) -> Task<Message> {
         let outcome = result.as_ref().map(|_| ()).map_err(Clone::clone);
         let closed = matches!(op, WriteOp::Close);
+        // The Roadmap Done summary stands in for the per-issue closes it ran.
+        let from_done = closed
+            && self
+                .done
+                .as_ref()
+                .is_some_and(|s| s.root == root && s.is_waiting(&id));
+        if !from_done {
+            self.notify_write(&root, &id, &op, &outcome);
+        }
         let applied = self.apply_written(root.clone(), id.clone(), op, result);
         if closed {
             Task::batch([applied, self.done_progress(&root, &id, outcome)])
@@ -1121,10 +1275,32 @@ impl App {
                 sheet.phase = DonePhase::Choose;
             }
             Err(msg) => {
-                sheet.error = Some(msg);
+                sheet.error = Some(msg.clone());
                 sheet.phase = DonePhase::Failed;
+                let name = sheet.name.clone();
+                self.notify(
+                    Tone::Danger,
+                    format!("Roadmap Done failed for {name}"),
+                    Some(msg),
+                );
             }
         }
+    }
+
+    fn complete_done(&mut self) {
+        let Some(sheet) = self.done.as_mut() else {
+            return;
+        };
+        sheet.phase = DonePhase::Closed;
+        let ok = sheet.results.values().filter(|r| r.is_ok()).count();
+        let failed = sheet.results.len() - ok;
+        let title = format!("Roadmap Done: {}", sheet.name);
+        let (tone, detail) = if failed == 0 {
+            (Tone::Success, format!("{ok} closed"))
+        } else {
+            (Tone::Danger, format!("{ok} closed, {failed} failed"))
+        };
+        self.notify(tone, title, Some(detail));
     }
 
     fn run_done(&mut self) -> Task<Message> {
@@ -1193,7 +1369,7 @@ impl App {
             return Task::none();
         }
         if sheet.epics_started {
-            sheet.phase = DonePhase::Closed;
+            self.complete_done();
             return Task::none();
         }
         sheet.epics_started = true;
@@ -1211,8 +1387,8 @@ impl App {
                 None => tasks.push(self.done_close(&root, &epic.id)),
             }
         }
-        if let Some(s) = self.done.as_mut().filter(|s| s.waiting.is_empty()) {
-            s.phase = DonePhase::Closed;
+        if self.done.as_ref().is_some_and(|s| s.waiting.is_empty()) {
+            self.complete_done();
         }
         Task::batch(tasks)
     }
@@ -1302,7 +1478,7 @@ impl App {
                 self.identity_asked = true;
                 let root = roots[0].clone();
                 tasks.push(Task::perform(
-                    async move { gitbug::current_user(&root).await.ok() },
+                    async move { gitbug::current_identity(&root).await.ok() },
                     Message::Identified,
                 ));
             }
@@ -1325,7 +1501,9 @@ impl App {
         };
         match result {
             Err(msg) => {
-                entry.state = LoadState::Error(msg);
+                let name = entry.info.name.clone();
+                entry.state = LoadState::Error(msg.clone());
+                self.notify(Tone::Danger, format!("{name} failed to load"), Some(msg));
                 self.complete_one();
                 Task::none()
             }
@@ -1378,7 +1556,9 @@ impl App {
                 Task::none()
             }
             Err(LoadFailure::Failed(msg)) => {
-                entry.state = LoadState::Error(msg);
+                let name = entry.info.name.clone();
+                entry.state = LoadState::Error(msg.clone());
+                self.notify(Tone::Danger, format!("{name} failed to load"), Some(msg));
                 Task::none()
             }
         };
@@ -2288,11 +2468,234 @@ mod tests {
     fn identity_sets_initials_and_failure_allows_a_retry() {
         let mut app = booted(&["a"]);
         assert_eq!(app.initials, "?");
-        app.send(Message::Identified(Some("Ada Lovelace".into())));
+        app.send(Message::Identified(Some(ada())));
         assert_eq!(app.initials, "AL");
+        assert_eq!(app.identity, Some(ada()));
         app.send(Message::Identified(None));
         assert_eq!(app.initials, "AL", "a failed lookup keeps the last name");
+        assert_eq!(app.identity, Some(ada()));
         assert!(!app.identity_asked);
+    }
+
+    fn ada() -> Identity {
+        Identity {
+            name: "Ada Lovelace".into(),
+            email: "ada@example.com".into(),
+        }
+    }
+
+    fn fail_close(app: &mut App) {
+        let _ = app.update(write(WriteOp::Close));
+        app.send(Message::WriteDone {
+            root: info("a").root,
+            id: "a".repeat(64),
+            op: WriteOp::Close,
+            result: Err("boom".into()),
+        });
+    }
+
+    #[test]
+    fn a_failed_write_pushes_a_notification_and_counts_it_unread() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        assert!(app.notifications.is_empty());
+        assert_eq!(app.unread, 0);
+        fail_close(&mut app);
+        assert_eq!(app.unread, 1);
+        let note = app.notifications.last().unwrap();
+        assert_eq!(note.tone, Tone::Danger);
+        assert!(note.title.contains("close"));
+        assert_eq!(note.detail.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn a_successful_write_notifies_with_the_issue_title() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        let _ = app.update(write(WriteOp::Close));
+        let msg = written(&app, WriteOp::Close, |i| i.status = Status::Closed);
+        app.send(msg);
+        let note = app.notifications.last().unwrap();
+        assert_eq!(note.tone, Tone::Success);
+        assert!(note.title.starts_with("Closed"));
+        assert_eq!(note.detail.as_deref(), Some("one"));
+        assert_eq!(app.unread, 1);
+    }
+
+    #[test]
+    fn opening_the_bell_resets_unread_and_arrivals_while_open_stay_read() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        fail_close(&mut app);
+        fail_close(&mut app);
+        assert_eq!(app.unread, 2);
+
+        app.send(Message::TogglePopover(Popover::Notifications));
+        assert_eq!(app.open_popover, Some(Popover::Notifications));
+        assert_eq!(app.unread, 0);
+        fail_close(&mut app);
+        assert_eq!(app.unread, 0);
+        assert_eq!(app.notifications.len(), 3);
+
+        app.send(Message::TogglePopover(Popover::Notifications));
+        assert_eq!(app.open_popover, None);
+        fail_close(&mut app);
+        assert_eq!(app.unread, 1);
+
+        app.send(Message::ClearNotifications);
+        assert!(app.notifications.is_empty());
+        assert_eq!(app.unread, 0);
+    }
+
+    #[test]
+    fn notifications_are_capped_and_unread_never_exceeds_them() {
+        let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
+        for n in 0..MAX_NOTIFICATIONS + 5 {
+            app.notify(Tone::Success, format!("n{n}"), None);
+        }
+        assert_eq!(app.notifications.len(), MAX_NOTIFICATIONS);
+        assert_eq!(app.notifications[0].title, "n5");
+        assert_eq!(app.unread, MAX_NOTIFICATIONS);
+    }
+
+    #[test]
+    fn failed_repo_loads_and_config_notices_are_announced() {
+        let mut app = booted(&["a", "b"]);
+        app.send(Message::Fingerprinted {
+            epoch: 1,
+            root: info("a").root,
+            result: Err("gone".into()),
+        });
+        app.send(Message::Fingerprinted {
+            epoch: 1,
+            root: info("b").root,
+            result: Ok("new".into()),
+        });
+        app.send(Message::Loaded {
+            epoch: 1,
+            root: info("b").root,
+            fingerprint: "new".into(),
+            result: Err(LoadFailure::Failed("corrupt".into())),
+        });
+        let titles: Vec<_> = app.notifications.iter().map(|n| n.title.as_str()).collect();
+        assert_eq!(titles, ["a failed to load", "b failed to load"]);
+
+        app.send(Message::Loaded {
+            epoch: 1,
+            root: info("b").root,
+            fingerprint: "new".into(),
+            result: Err(LoadFailure::Locked),
+        });
+        assert_eq!(
+            app.notifications.len(),
+            2,
+            "a lock is retried, not reported"
+        );
+
+        app.send(Message::Persisted(Err("disk full".into())));
+        assert_eq!(app.notice.as_deref(), Some("save failed: disk full"));
+        assert_eq!(app.notifications.last().unwrap().tone, Tone::Warning);
+    }
+
+    #[test]
+    fn roadmap_done_reports_once_instead_of_per_close() {
+        let mut app = sheet_open();
+        let _ = app.update(Message::RunDone);
+        app.send(closed('b', Ok(())));
+        app.send(closed('c', Err("locked")));
+        let notes: Vec<_> = app
+            .notifications
+            .iter()
+            .map(|n| (n.tone, n.title.as_str(), n.detail.as_deref()))
+            .collect();
+        assert_eq!(
+            notes,
+            [(Tone::Danger, "Roadmap Done: a", Some("1 closed, 2 failed"))]
+        );
+    }
+
+    #[test]
+    fn roadmap_done_that_cannot_read_the_base_is_announced() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        let _ = app.update(Message::OpenDone(info("a").root));
+        let seq = sheet(&app).seq;
+        app.send(Message::DoneFound {
+            seq,
+            result: Err("no base branch".into()),
+        });
+        let note = app.notifications.last().unwrap();
+        assert_eq!(note.tone, Tone::Danger);
+        assert_eq!(note.detail.as_deref(), Some("no base branch"));
+    }
+
+    #[test]
+    fn choosing_a_repo_filters_the_issues_page_and_closes_the_switcher() {
+        let mut app = booted(&["a", "b"]);
+        app.send(Message::TogglePopover(Popover::Repos));
+        assert_eq!(app.section, Section::Repositories);
+
+        app.send(Message::ChooseRepo(Some(info("b").root)));
+        assert_eq!(app.section, Section::Issues);
+        assert_eq!(app.filter.repos.len(), 1);
+        assert!(app.filter.repos.contains(&info("b").root));
+        assert_eq!(app.open_popover, None);
+
+        app.section = Section::Overview;
+        app.send(Message::ChooseRepo(None));
+        assert_eq!(app.section, Section::Issues);
+        assert!(app.filter.repos.is_empty());
+    }
+
+    #[test]
+    fn every_popover_builds_a_view() {
+        let mut app = loaded(&[("one", Status::Open)]);
+        app.identity = Some(ada());
+        fail_close(&mut app);
+        for popover in [
+            Popover::Repos,
+            Popover::Overflow,
+            Popover::Notifications,
+            Popover::Identity,
+        ] {
+            app.open_popover = Some(popover);
+            let _ = app.view();
+        }
+    }
+
+    #[test]
+    fn only_one_popover_is_open_and_escape_closes_it_before_the_pane() {
+        let mut app = numbered(2);
+        enter(&mut app);
+        app.send(Message::TogglePopover(Popover::Overflow));
+        app.send(Message::TogglePopover(Popover::Identity));
+        assert_eq!(app.open_popover, Some(Popover::Identity));
+        escape(&mut app, false);
+        assert_eq!(app.open_popover, None);
+        assert!(app.detail.is_some());
+        escape(&mut app, false);
+        assert!(app.detail.is_none());
+    }
+
+    #[test]
+    fn menu_actions_close_the_popover() {
+        let mut app = booted(&["a"]);
+        app.config_locked = true;
+        for message in [
+            Message::Rescan,
+            Message::ToggleHelp,
+            Message::Navigate(Section::Epics),
+            Message::OpenDone(info("a").root),
+        ] {
+            app.send(Message::TogglePopover(Popover::Overflow));
+            assert_eq!(app.open_popover, Some(Popover::Overflow));
+            app.send(message);
+            assert_eq!(app.open_popover, None);
+        }
+        app.send(Message::TogglePopover(Popover::Identity));
+        app.send(Message::SetTheme(ThemePref::Dark));
+        assert_eq!(app.workspace.theme, ThemePref::Dark);
+        assert_eq!(
+            app.open_popover,
+            Some(Popover::Identity),
+            "stays for more picks"
+        );
     }
 
     #[test]

@@ -111,6 +111,37 @@ pub fn scrim(_theme: &Theme) -> container::Style {
     }
 }
 
+/// Floating menu surface for top-bar popovers.
+pub fn popover(theme: &Theme) -> container::Style {
+    let t = Tokens::of(theme);
+    container::Style {
+        background: Some(t.surface.into()),
+        text_color: Some(t.text),
+        border: Border {
+            color: t.border,
+            width: 1.0,
+            radius: radius::LG.into(),
+        },
+        shadow: Shadow {
+            color: t.shadow,
+            offset: Vector::new(0.0, 6.0),
+            blur_radius: 20.0,
+        },
+        ..container::Style::default()
+    }
+}
+
+/// Unread count on the bell.
+pub fn badge(theme: &Theme) -> container::Style {
+    let t = Tokens::of(theme);
+    container::Style {
+        background: Some(t.danger.into()),
+        text_color: Some(Color::WHITE),
+        border: border::rounded(radius::PILL),
+        ..container::Style::default()
+    }
+}
+
 pub fn divider(theme: &Theme) -> container::Style {
     let t = Tokens::of(theme);
     container::Style {
@@ -215,7 +246,7 @@ pub fn pill(theme: &Theme, status: button::Status) -> button::Style {
         button::Status::Hovered | button::Status::Pressed => t.fill_hover,
         _ => t.fill.scale_alpha(0.6),
     };
-    filled(bg, t.text, radius::LG)
+    dimmed(filled(bg, t.text, radius::LG), status)
 }
 
 /// Selected filter chip / active top pill: tinted fill, accent border and text.
@@ -334,6 +365,28 @@ pub fn card_button(selected: bool) -> impl Fn(&Theme, button::Status) -> button:
             shadow: soft_shadow(&t),
             ..filled(bg, t.text, radius::XL)
         }
+    }
+}
+
+/// Popover menu row; the current choice gets a tinted fill.
+pub fn menu_item(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let t = Tokens::of(theme);
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let (bg, fg) = match (selected, hovered) {
+            (true, _) => (Some(t.accent_soft), t.accent),
+            (false, true) => (Some(t.fill.scale_alpha(0.5)), t.text),
+            (false, false) => (None, t.text),
+        };
+        dimmed(
+            button::Style {
+                background: bg.map(Background::Color),
+                text_color: fg,
+                border: border::rounded(radius::MD),
+                ..button::Style::default()
+            },
+            status,
+        )
     }
 }
 
