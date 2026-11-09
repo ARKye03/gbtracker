@@ -27,6 +27,18 @@ use gbtracker::workspace::{Root, RootKind, ThemePref};
 
 const SIDEBAR_WIDTH: f32 = 276.0;
 const RAIL_WIDTH: f32 = 64.0;
+const NAV_BAR_WIDTH: f32 = 3.0;
+const NAV_GAP: f32 = 4.0;
+const NAV_ICON: f32 = 16.0;
+const NAV_PAD: f32 = 16.0;
+
+/// Left padding that keeps the nav icon at `NAV_PAD` when expanded and centered in the button at the rail width.
+fn nav_icon_pad(width: f32) -> f32 {
+    let button = RAIL_WIDTH - NAV_BAR_WIDTH - NAV_GAP;
+    let centered = (button - NAV_ICON) / 2.0;
+    let collapse = ((SIDEBAR_WIDTH - width) / (SIDEBAR_WIDTH - RAIL_WIDTH)).clamp(0.0, 1.0);
+    NAV_PAD + (centered - NAV_PAD) * collapse
+}
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let page = match app.section {
@@ -34,7 +46,6 @@ pub fn view(app: &App) -> Element<'_, Message> {
         Section::Issues => issues(app),
         Section::Epics => epics_page(app),
         Section::Overview => overview(app),
-        other => content(other),
     };
     let mut body = row![sidebar(app), page].spacing(32).height(Fill);
     if matches!(app.section, Section::Issues | Section::Epics)
@@ -208,12 +219,13 @@ fn sidebar(app: &App) -> Element<'_, Message> {
     let alpha = app.sidebar.interpolate(1.0_f32, 0.0, app.now).powi(2);
     let active = app.section;
     let collapsed = app.sidebar.value();
+    let pad = nav_icon_pad(width);
     let items = Section::ALL.iter().map(|&s| {
         let (svg, label) = s.meta();
         let is_active = s == active;
         let nav = button(
             row![
-                icon(svg, 16.0),
+                icon(svg, NAV_ICON),
                 text(label)
                     .size(15)
                     .wrapping(Wrapping::None)
@@ -223,7 +235,12 @@ fn sidebar(app: &App) -> Element<'_, Message> {
             .align_y(Alignment::Center),
         )
         .width(Fill)
-        .padding([12, 16])
+        .padding(Padding {
+            top: 8.0,
+            right: NAV_PAD,
+            bottom: 8.0,
+            left: pad,
+        })
         .style(if is_active {
             style::nav_item_active
         } else {
@@ -232,81 +249,22 @@ fn sidebar(app: &App) -> Element<'_, Message> {
         .on_press(Message::Navigate(s));
         row![
             container(space())
-                .width(3)
+                .width(NAV_BAR_WIDTH)
                 .height(22)
                 .style(style::nav_bar(is_active)),
             tip(nav, label)
                 .shortcut_maybe(keymap::hint(Action::Goto(s)))
                 .enabled(collapsed)
         ]
-        .spacing(4)
+        .spacing(NAV_GAP)
         .align_y(Alignment::Center)
         .into()
     });
 
-    container(
-        column![
-            column![
-                text("Workspace")
-                    .size(21)
-                    .wrapping(Wrapping::None)
-                    .style(style::faded(alpha)),
-                text!(
-                    "{} projects · {} repositories",
-                    app.workspace.roots.len(),
-                    app.repos.len()
-                )
-                .size(13)
-                .wrapping(Wrapping::None)
-                .style(style::faded_subtle(alpha)),
-            ]
-            .spacing(4),
-            column(items).spacing(6),
-        ]
-        .spacing(36),
-    )
-    .width(width)
-    .clip(true)
-    .into()
-}
-
-fn content(section: Section) -> Element<'static, Message> {
-    let (_, title) = section.meta();
-
-    let header = row![
-        text(title).size(21),
-        button(
-            row![icon_muted(lu::plus(), 15.0), text("Add Filters").size(15)]
-                .spacing(6)
-                .align_y(Alignment::Center)
-        )
-        .padding([8, 12])
-        .style(style::outline)
-        .on_press(Message::Noop),
-        button(
-            row![icon_muted(lu::search(), 17.0), text("Search").size(15)]
-                .spacing(8)
-                .align_y(Alignment::Center)
-        )
-        .padding([8, 6])
-        .style(style::ghost)
-        .on_press(Message::Noop),
-        space::horizontal(),
-        secondary_button("Export", Message::Noop),
-        primary_button("New Epic", Message::Noop),
-    ]
-    .spacing(18)
-    .align_y(Alignment::Center);
-
-    column![
-        header,
-        scrollable(empty_state(title))
-            .height(Fill)
-            .style(style::scroll),
-    ]
-    .spacing(28)
-    .width(Fill)
-    .into()
+    container(column(items).spacing(2))
+        .width(width)
+        .clip(true)
+        .into()
 }
 
 fn epics_page(app: &App) -> Element<'_, Message> {
@@ -579,23 +537,6 @@ fn overview_card(entry: &RepoEntry, spin: usize) -> Element<'_, Message> {
     )
     .padding(28)
     .width(Fill)
-    .style(style::card)
-    .into()
-}
-
-fn empty_state(title: &'static str) -> Element<'static, Message> {
-    container(
-        column![
-            text(title).size(18),
-            text("Mock screen — not wired yet.")
-                .size(14)
-                .style(style::muted),
-        ]
-        .spacing(6)
-        .align_x(Alignment::Center),
-    )
-    .padding(48)
-    .center_x(Fill)
     .style(style::card)
     .into()
 }
@@ -1148,4 +1089,21 @@ fn skeleton_row() -> Element<'static, Message> {
     .width(Fill)
     .style(style::card)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rail_icon_is_centered_in_the_nav_button() {
+        let button = RAIL_WIDTH - NAV_BAR_WIDTH - NAV_GAP;
+        let icon_center = nav_icon_pad(RAIL_WIDTH) + NAV_ICON / 2.0;
+        assert!((icon_center - button / 2.0).abs() <= 0.5);
+    }
+
+    #[test]
+    fn expanded_icon_keeps_the_regular_padding() {
+        assert_eq!(nav_icon_pad(SIDEBAR_WIDTH), NAV_PAD);
+    }
 }

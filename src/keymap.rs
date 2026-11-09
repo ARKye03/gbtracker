@@ -154,15 +154,11 @@ const fn named(key: Named, scope: Scope, action: Action) -> Binding {
     }
 }
 
-const BINDINGS: [Binding; 23] = [
+const BINDINGS: [Binding; 19] = [
     cmd("1", Action::Goto(Section::ALL[0])),
     cmd("2", Action::Goto(Section::ALL[1])),
     cmd("3", Action::Goto(Section::ALL[2])),
     cmd("4", Action::Goto(Section::ALL[3])),
-    cmd("5", Action::Goto(Section::ALL[4])),
-    cmd("6", Action::Goto(Section::ALL[5])),
-    cmd("7", Action::Goto(Section::ALL[6])),
-    cmd("8", Action::Goto(Section::ALL[7])),
     cmd("b", Action::ToggleSidebar),
     cmd("k", Action::FocusSearch),
     cmd("f", Action::FocusSearch),
@@ -303,6 +299,13 @@ mod tests {
                 "Cmd+{}",
                 i + 1
             );
+        }
+    }
+
+    #[test]
+    fn command_digits_past_the_last_section_are_unbound() {
+        for digit in ["5", "6", "7", "8"] {
+            assert_eq!(resolve(&ch(digit), CMD, ctx(Section::Epics)), None);
         }
     }
 
@@ -469,7 +472,7 @@ mod tests {
     fn help_lists_every_action_once_with_all_its_chords() {
         let all: Vec<_> = Group::ALL.iter().flat_map(|g| rows(*g, false)).collect();
         let labels: Vec<_> = all.iter().map(|(l, _)| l.as_str()).collect();
-        assert_eq!(labels.len(), 8 + 2 + 4 + 5);
+        assert_eq!(labels.len(), 4 + 2 + 4 + 5);
         let search = all.iter().find(|(l, _)| l == "Search issues").unwrap();
         assert_eq!(search.1, ["Ctrl+K", "Ctrl+F"]);
         let help = all
@@ -478,10 +481,7 @@ mod tests {
             .unwrap();
         assert_eq!(help.1, ["?", "Ctrl+/"]);
         let sections = rows(Group::Navigation, true);
-        assert_eq!(
-            sections[0],
-            ("Go to Repositories".into(), vec!["⌘1".into()])
-        );
+        assert_eq!(sections[0], ("Go to Overview".into(), vec!["⌘1".into()]));
     }
 
     #[test]
@@ -497,6 +497,6 @@ mod tests {
                 .render(on_mac())
             )
         );
-        assert!(hint(Action::Goto(Section::Analytics)).is_some());
+        assert!(hint(Action::Goto(Section::Repositories)).is_some());
     }
 }

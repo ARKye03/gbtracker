@@ -314,25 +314,6 @@ pub fn ghost(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// Approximates the proposal's dashed "Add Filters" outline (iced has no dashed borders).
-pub fn outline(theme: &Theme, status: button::Status) -> button::Style {
-    let t = Tokens::of(theme);
-    let (fg, bg) = match status {
-        button::Status::Hovered | button::Status::Pressed => (t.text, t.fill.scale_alpha(0.5)),
-        _ => (t.text_muted, Color::TRANSPARENT),
-    };
-    button::Style {
-        background: Some(bg.into()),
-        text_color: fg,
-        border: Border {
-            color: t.border,
-            width: 1.0,
-            radius: radius::MD.into(),
-        },
-        ..button::Style::default()
-    }
-}
-
 /// A whole card that can be pressed; the open one gets an accent outline.
 pub fn card_button(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme, status| {

@@ -3204,8 +3204,10 @@ mod tests {
         app.config_locked = true;
         cmd(&mut app, "3");
         assert_eq!(app.section, Section::ALL[2]);
+        cmd(&mut app, "4");
+        assert_eq!(app.section, Section::Repositories);
         cmd(&mut app, "8");
-        assert_eq!(app.section, Section::ALL[7]);
+        assert_eq!(app.section, Section::Repositories);
         cmd(&mut app, "b");
         assert!(app.workspace.sidebar_collapsed);
     }
@@ -3223,7 +3225,7 @@ mod tests {
     fn command_k_and_f_land_on_issues_search() {
         for key in ["k", "f"] {
             let mut app = App::from_parts(Workspace::default(), Snapshot::default(), None);
-            assert_eq!(app.section, Section::Repositories);
+            assert_eq!(app.section, Section::Overview);
             assert_eq!(cmd_task(&mut app, key).units(), 1, "focus operation");
             assert_eq!(app.section, Section::Issues);
         }

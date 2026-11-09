@@ -11,38 +11,26 @@ use app::App;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Section {
     #[default]
-    Repositories,
     Overview,
     Issues,
     Epics,
-    Labels,
-    Identities,
-    Bridges,
-    Analytics,
+    Repositories,
 }
 
 impl Section {
-    pub const ALL: [Section; 8] = [
-        Section::Repositories,
+    pub const ALL: [Section; 4] = [
         Section::Overview,
         Section::Issues,
         Section::Epics,
-        Section::Labels,
-        Section::Identities,
-        Section::Bridges,
-        Section::Analytics,
+        Section::Repositories,
     ];
 
     pub fn meta(self) -> (Svg<'static>, &'static str) {
         match self {
-            Section::Repositories => (lu::folder_git_2(), "Repositories"),
             Section::Overview => (lu::house(), "Overview"),
             Section::Issues => (lu::bug(), "Issues"),
             Section::Epics => (lu::milestone(), "Epics"),
-            Section::Labels => (lu::tag(), "Labels"),
-            Section::Identities => (lu::users(), "Identities"),
-            Section::Bridges => (lu::cable(), "Bridges"),
-            Section::Analytics => (lu::chart_line(), "Analytics"),
+            Section::Repositories => (lu::folder_git_2(), "Repositories"),
         }
     }
 }
