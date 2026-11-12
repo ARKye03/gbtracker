@@ -4,6 +4,8 @@ GBTracker is a desktop app for the issues [git-bug](https://github.com/git-bug/g
 
 It reads and writes through the `git-bug` CLI, so nothing lives in a separate database. Close an issue here and `git bug` sees it closed.
 
+![GBTracker issues view](.github/assets/preview.avif)
+
 ## Requirements
 
 - `git` and `git-bug` installed. GBTracker looks on your `PATH`, then in `/opt/homebrew/bin`, `/usr/local/bin`, `~/go/bin`, `~/.local/bin` and `~/.nix-profile/bin`, which covers launching it from Finder or the Dock.
